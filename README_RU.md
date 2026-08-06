@@ -26,6 +26,16 @@
 
 `start.ps1` использует локальный `config/config.local.yaml` и слушает только `127.0.0.1`. Swagger: `http://127.0.0.1:8020/docs`; health: `http://127.0.0.1:8020/health`.
 
+Backend вместе с установленной ComfyUI:
+
+```powershell
+.\scripts\start-tts-and-comfyui.ps1
+.\scripts\test-comfyui-integration.ps1 -SkipSynthesis
+# без -SkipSynthesis выполняется реальный короткий Qwen workflow
+```
+
+ComfyUI: `http://127.0.0.1:8188`. Краткая инструкция: [docs/COMFYUI_QUICKSTART_RU.md](docs/COMFYUI_QUICKSTART_RU.md).
+
 ## Повторная установка
 
 Нужен CPython 3.12. На этой системе `py` не содержит установленного Python, поэтому путь передаётся явно:
@@ -71,7 +81,7 @@ Endpoints: `GET /health`, `/v1/models`, `/v1/voices`, `/metrics`; `POST /v1/audi
 - [ComfyUI](docs/COMFYUI_SETUP_RU.md)
 - Workflow JSON: `integrations/comfyui/example_workflows`
 
-Установщик ComfyUI требует точный путь и подтверждение. Ничего в существующей ComfyUI или SillyTavern автоматически не изменялось.
+Официальная ComfyUI Windows Portable NVIDIA `0.30.0` проверена в `D:\Folder\ia\ComfyUI_windows_portable`. Доступны Server, Health, Models, Voice Selector, Emotion Script, Synthesize и Clone Voice. Ноды установлены копированием и не содержат Qwen/torch/transformers; Qwen-модель остаётся только в backend. SillyTavern не изменялась.
 
 ## Режимы
 

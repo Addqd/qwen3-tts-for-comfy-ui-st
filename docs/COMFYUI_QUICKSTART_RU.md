@@ -1,0 +1,15 @@
+# ComfyUI Quick Start
+
+1. Откройте PowerShell в корне `qwen3-tts-st`.
+2. Запустите `.\scripts\start-tts-and-comfyui.ps1`.
+3. Дождитесь готовности `http://127.0.0.1:8020/health` и `http://127.0.0.1:8188/system_stats`.
+4. Откройте в браузере `http://127.0.0.1:8188`.
+5. Перетащите на холст `integrations\comfyui\example_workflows\backend_health_and_voices.json`.
+6. Нажмите **Queue** и убедитесь, что Health показывает `ok`, Models — `tts-1-ru`, Voices — текущие профили.
+7. Откройте `emotion_script_preview.json` и нажмите **Queue**; WAV и модель для него не нужны.
+8. Откройте `text_to_speech_ru.json`, оставьте endpoint `http://127.0.0.1:8020`, выберите существующий voice и введите русский текст.
+9. Нажмите **Queue**; первая on-demand генерация может занять около минуты. Прослушайте результат в `Preview Audio`.
+10. Для автоматической проверки выполните `.\scripts\test-comfyui-integration.ps1 -SkipSynthesis`; без флага выполняется реальный короткий синтез.
+11. Остановите ComfyUI: `.\scripts\stop-comfyui.ps1`; backend: `.\stop.ps1`.
+
+`voice_clone_and_synthesize_ru.json` оставьте до появления разрешённого WAV и точной дословной транскрипции. Подробности: [COMFYUI_SETUP_RU.md](COMFYUI_SETUP_RU.md).

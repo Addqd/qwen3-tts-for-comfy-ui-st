@@ -1,6 +1,6 @@
 # Проверенные источники
 
-Дата проверки всех записей: 2026-08-05. При отсутствии релизного тега указан наблюдавшийся branch snapshot; это честнее выдуманного commit hash.
+Дата первоначальной проверки: 2026-08-05; источники ComfyUI повторно проверены 2026-08-06. При отсутствии релизного тега указан наблюдавшийся branch snapshot; это честнее выдуманного commit hash.
 
 | Источник | Версия/snapshot | Что подтверждено | Решение/ограничение |
 |---|---|---|---|
@@ -15,8 +15,13 @@
 | [SillyTavern proxy source](https://github.com/SillyTavern/SillyTavern/blob/release/src/endpoints/openai.js) | `release` 2026-08-05 | proxy POST точно на `provider_endpoint`, Bearer key может быть пустым | В документации указан полный `/v1/audio/speech` |
 | [ComfyUI custom-node lifecycle](https://docs.comfy.org/custom-nodes/backend/lifecycle) | current 2026-08-05 | package init, class mappings, node schema | Реализована актуальная регистрация |
 | [ComfyUI custom-node install](https://docs.comfy.org/installation/install_custom_node) | current 2026-08-05 | `custom_nodes`, restart, dependency isolation concerns | Безопасный junction/copy installer |
-| [ComfyUI audio nodes source](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy_extras/nodes_audio.py) | `master` 2026-08-05 | AUDIO = waveform tensor `[batch,channels,samples]` + sample_rate; встроенные preview/save возможности | Возвращается настоящий AUDIO; отдельный Save Audio не дублируется |
-| [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) | `main`, V3-era snapshot | manager is current ecosystem installer | Наш локальный пакет пока не публикуется в registry, ставится скриптом |
+| [ComfyUI Windows Portable](https://docs.comfy.org/installation/comfyui_portable_windows) | current 2026-08-06 | стандартный NVIDIA package использует CUDA 13/Python 3.13 и предназначен для RTX; cu126/Python 3.12 указан как альтернатива для старых 10-series | Для RTX 2070 Super выбран стандартный официальный NVIDIA asset |
+| [ComfyUI release v0.30.0](https://github.com/Comfy-Org/ComfyUI/releases/tag/v0.30.0) | tag `v0.30.0`, commit `b1693ec`, 2026-08-03 | официальный Windows Portable NVIDIA asset | Проверены размер 2 110 797 220 bytes и SHA256 `f4353d069dd7342e3bef421f07f003cca53ca84168102705cfc83f66449f5ae5` до распаковки |
+| [ComfyUI audio nodes source](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy_extras/nodes_audio.py) | `v0.30.0`/`master` checked 2026-08-06 | loader возвращает tensor `[channels,samples]`, custom node добавляет batch; AUDIO = `[batch,channels,samples]` + sample_rate; PreviewAudio/SaveAudio | Возвращается настоящий AUDIO; отдельный Save Audio не дублируется |
+| [ComfyUI server API source](https://github.com/Comfy-Org/ComfyUI/blob/master/server.py) | `v0.30.0`/`master` checked 2026-08-06 | `/system_stats`, `/object_info`, `/prompt`, `/history/{prompt_id}`, `/queue` | Реальный integration test использует текущие endpoints и execution history |
+| [ComfyUI startup source](https://github.com/Comfy-Org/ComfyUI/blob/master/main.py) | `v0.30.0` checked 2026-08-06 | `--enable-manager`, `--listen`, `--port`, standalone flags | Launcher всегда передаёт `--listen 127.0.0.1` |
+| [ComfyUI update guide](https://docs.comfy.org/installation/update_comfyui) | current 2026-08-06 | официальный update path и необходимость сохранять user data | В инструкции рекомендована отдельная проверяемая новая папка, а не слепая распаковка поверх рабочей |
+| [ComfyUI-Manager](https://github.com/Comfy-Org/ComfyUI-Manager) | `comfyui-manager 4.2.2`, checked 2026-08-06 | текущая Portable содержит `manager_requirements.txt` и запускает Manager через `--enable-manager` | Использован shipped requirement; устаревший отдельный custom-node Manager не накладывался |
 | [groxaxo/Qwen3-TTS-Openai-Fastapi](https://github.com/groxaxo/Qwen3-TTS-Openai-Fastapi) | `main` 2026-08-05 | внешний OpenAI-shaped FastAPI server — архитектурно жизнеспособен | Не скопирован: наш server строже 127.0.0.1, shared voices/router/resources |
 | [1038lab/ComfyUI-QwenTTS](https://github.com/1038lab/ComfyUI-QwenTTS) | `main` 2026-08-05 | пример прямой загрузки Qwen в ComfyUI | Не установлен: дублирование модели и зависимости |
 | [DarioFT/ComfyUI-Qwen3-TTS](https://github.com/DarioFT/ComfyUI-Qwen3-TTS) | `main` 2026-08-05 | альтернативные in-process workflows | Только технический референс, не основной режим |

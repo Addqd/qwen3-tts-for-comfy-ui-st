@@ -30,4 +30,12 @@ Get-Content .\logs\server.err.log -Tail 100
 
 **ComfyUI missing nodes.** Перезапустите ComfyUI, проверьте marker/junction, затем `test-comfyui-integration.ps1`. Backend Python и ComfyUI Python должны оставаться раздельными.
 
+**ComfyUI не запускается или порт 8188 занят.** Выполните `.\scripts\status-comfyui.ps1` и прочитайте `logs\comfyui.err.log`. Launcher не завершает владельца занятого порта. Не используйте `0.0.0.0`.
+
+**Backup нод импортируется второй раз.** Текущий installer хранит backups в `ComfyUI\.qwen_tts_api_nodes-backups`, а не в `custom_nodes`. Если осталась старая папка `custom_nodes\qwen_tts_api_nodes.backup-*`, остановите ComfyUI и перенесите её за пределы `custom_nodes`; не удаляйте вслепую.
+
+**Manager сообщает, что нет matrix-nio.** Необязательная matrix-sharing функция отключена; для Manager UI и Qwen API nodes это не import error. Не устанавливайте пакет без отдельной необходимости.
+
+**Проверка реального workflow.** Запустите оба сервиса, затем `.\scripts\test-comfyui-integration.ps1 -SkipSynthesis`. Без флага выполняется Qwen synthesis с техническим demo-профилем. Скрипт проверяет `/prompt`, `/history`, пустую `/queue`, workflows и отсутствие `qwen_tts` в ComfyUI Python.
+
 **PowerShell показывает кракозябры.** Это ограничение Windows PowerShell 5.1 при интерпретации некоторых UTF-8 ответов/потоков. API содержит `charset=utf-8`; браузер/Python корректны. Скрипты проекта сохранены ASCII-only, русские test strings передаются JSON Unicode escapes.
