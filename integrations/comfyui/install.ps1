@@ -30,7 +30,9 @@ if ((Test-Path -LiteralPath $Target) -and -not $ReplaceExisting) {
 
 if ($PSCmdlet.ShouldProcess($Target, "Install Qwen TTS API custom node ($Mode)")) {
     if (Test-Path -LiteralPath $Target) {
-        $Backup = "$Target.backup-{0:yyyyMMdd-HHmmss}" -f (Get-Date)
+        $BackupRoot = Join-Path (Split-Path -Parent $CustomNodes) ".qwen_tts_api_nodes-backups"
+        New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
+        $Backup = Join-Path $BackupRoot ("qwen_tts_api_nodes-{0:yyyyMMdd-HHmmss}" -f (Get-Date))
         Move-Item -LiteralPath $Target -Destination $Backup
         Write-Host "Existing node moved to: $Backup"
     }
