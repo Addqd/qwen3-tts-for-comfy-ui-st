@@ -16,8 +16,9 @@ import numpy as np
 
 
 CATEGORY = "Qwen TTS API"
-VERSION = "0.1.0"
-TAG_RE = re.compile(r"\[voice:(neutral|soft|whisper|breathy|happy|sad|angry|tense)\]", re.I)
+VERSION = "0.2.0"
+ALLOWED_STYLES = {"neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense"}
+TAG_RE = re.compile(r"\[voice:([a-z][a-z0-9_-]*)\]", re.I)
 
 
 def _endpoint(value: str) -> str:
@@ -57,6 +58,11 @@ def _json_request(server: dict, path: str, payload: dict | None = None) -> tuple
         return body, response.headers
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            parsed_detail = json.loads(detail)
+            detail = str(parsed_detail.get("detail") or parsed_detail.get("error", {}).get("message") or detail)
+        except (json.JSONDecodeError, AttributeError):
+            pass
         raise RuntimeError(f"Qwen TTS API HTTP {exc.code}: {detail}") from exc
     except (error.URLError, TimeoutError) as exc:
         raise RuntimeError(f"Qwen TTS API unavailable at {url}: {exc}") from exc
@@ -99,6 +105,10 @@ def _audio_to_wav_bytes(audio: dict) -> bytes:
         handle.setframerate(int(audio["sample_rate"]))
         handle.writeframes(pcm)
     return output.getvalue()
+
+
+def _ui_result(name: str, result: tuple, value: Any) -> dict:
+    return {"ui": {name: [value]}, "result": result}
 
 
 class QwenTTSServerNode:
@@ -146,6 +156,7 @@ class QwenTTSSynthesizeNode:
     RETURN_NAMES = ("audio", "temporary_path", "metadata", "duration")
     FUNCTION = "synthesize"
     CATEGORY = CATEGORY
+    OUTPUT_NODE = True
 
     def synthesize(self, server, text, voice, speed, model, response_format, preprocessing_mode, emotion_script=""):
         spoken = emotion_script.strip() or text
@@ -161,7 +172,8 @@ class QwenTTSSynthesizeNode:
             path.write_bytes(_audio_to_wav_bytes(audio))
         duration = float(headers.get("X-Audio-Duration", audio["waveform"].shape[-1] / audio["sample_rate"]))
         metadata = json.dumps({"model": payload["model"], "voice": voice, "format": response_format, "sample_rate": audio["sample_rate"], "duration": duration, "node_version": VERSION}, ensure_ascii=False)
-        return audio, str(path), metadata, duration
+        result = (audio, str(path), metadata, duration)
+        return _ui_result("qwen_tts_synthesis", result, metadata)
 
 
 class QwenTTSCloneVoiceNode:
@@ -206,16 +218,20 @@ class QwenTTSVoiceSelectorNode:
     RETURN_NAMES = ("voice_id", "available_voices")
     FUNCTION = "select"
     CATEGORY = CATEGORY
+    OUTPUT_NODE = True
 
     def select(self, server, voice):
         try:
             result, _ = _json_request(server, "/v1/voices")
             voices = [item["voice_id"] for item in result.get("data", [])]
         except RuntimeError as exc:
-            return voice, f"backend unavailable: {exc}"
+            result = (voice, f"backend unavailable: {exc}")
+            return _ui_result("qwen_tts_voices", result, result[1])
         if voice not in voices and voice.lower() not in [item.lower() for item in voices]:
-            return voice, "requested voice is not currently available; " + ", ".join(voices)
-        return voice, ", ".join(voices)
+            result = (voice, "requested voice is not currently available; " + ", ".join(voices))
+            return _ui_result("qwen_tts_voices", result, result[1])
+        result = (voice, ", ".join(voices))
+        return _ui_result("qwen_tts_voices", result, result[1])
 
 
 class QwenTTSEmotionScriptNode:
@@ -223,13 +239,16 @@ class QwenTTSEmotionScriptNode:
     def INPUT_TYPES(cls):
         return {"required": {"text": ("STRING", {"multiline": True}), "character_profile_mapping": ("STRING", {"multiline": True, "default": "{}"})}}
 
-    RETURN_TYPES = ("STRING", "STRING", "STRING")
-    RETURN_NAMES = ("normalized_script", "segments", "clean_text")
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("normalized_script", "segments", "clean_text", "recognized_styles")
     FUNCTION = "parse"
     CATEGORY = CATEGORY
+    OUTPUT_NODE = True
 
     def parse(self, text, character_profile_mapping):
         mapping = json.loads(character_profile_mapping or "{}")
+        if not isinstance(mapping, dict):
+            raise ValueError("character_profile_mapping must be a JSON object")
         matches = list(TAG_RE.finditer(text))
         segments = []
         style, cursor = "neutral", 0
@@ -237,15 +256,42 @@ class QwenTTSEmotionScriptNode:
             part = text[cursor:match.start()].strip()
             if part:
                 segments.append({"style": style, "voice": mapping.get(style), "text": part})
-            style, cursor = match.group(1).lower(), match.end()
+            requested_style = match.group(1).lower()
+            style = requested_style if requested_style in ALLOWED_STYLES else "neutral"
+            cursor = match.end()
         tail = text[cursor:].strip()
         if tail:
             segments.append({"style": style, "voice": mapping.get(style), "text": tail})
         if not segments and text.strip():
             segments = [{"style": "neutral", "voice": mapping.get("neutral"), "text": text.strip()}]
         normalized = " ".join(f"[voice:{item['style']}] {item['text']}" for item in segments)
-        clean = TAG_RE.sub("", text).strip()
-        return normalized, json.dumps(segments, ensure_ascii=False), clean
+        clean = " ".join(TAG_RE.sub("", text).split())
+        styles = ", ".join(dict.fromkeys(item["style"] for item in segments))
+        result = (normalized, json.dumps(segments, ensure_ascii=False), clean, styles)
+        return _ui_result("qwen_tts_emotion", result, {"segments": segments, "clean_text": clean, "styles": styles})
+
+
+class QwenTTSModelsNode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"server": ("QWEN_TTS_SERVER",)}}
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("model_ids", "models_json")
+    FUNCTION = "list_models"
+    CATEGORY = CATEGORY
+    OUTPUT_NODE = True
+
+    def list_models(self, server):
+        try:
+            result, _ = _json_request(server, "/v1/models")
+            models = result.get("data", [])
+            names = ", ".join(str(item.get("id", "")) for item in models if item.get("id"))
+            result_tuple = (names, json.dumps(models, ensure_ascii=False))
+            return _ui_result("qwen_tts_models", result_tuple, models)
+        except RuntimeError as exc:
+            result_tuple = ("", f"backend unavailable: {exc}")
+            return _ui_result("qwen_tts_models", result_tuple, result_tuple[1])
 
 
 class QwenTTSHealthNode:
@@ -257,15 +303,18 @@ class QwenTTSHealthNode:
     RETURN_NAMES = ("available", "device", "model", "voices", "queue_length", "resources")
     FUNCTION = "check"
     CATEGORY = CATEGORY
+    OUTPUT_NODE = True
 
     def check(self, server):
         try:
             health, _ = _json_request(server, "/health")
             voices, _ = _json_request(server, "/v1/voices")
             names = ", ".join(item["voice_id"] for item in voices.get("data", []))
-            return True, str(health.get("device")), str(health.get("model")), names, int(health.get("queue_waiting", 0)), json.dumps(health.get("resources", {}), ensure_ascii=False)
+            result = (True, str(health.get("device")), str(health.get("model")), names, int(health.get("queue_waiting", 0)), json.dumps(health.get("resources", {}), ensure_ascii=False))
+            return _ui_result("qwen_tts_health", result, health)
         except RuntimeError as exc:
-            return False, "unknown", "unknown", "", 0, str(exc)
+            result = (False, "unknown", "unknown", "", 0, str(exc))
+            return _ui_result("qwen_tts_health", result, {"status": "unavailable", "error": str(exc)})
 
 
 NODE_CLASS_MAPPINGS = {
@@ -274,6 +323,7 @@ NODE_CLASS_MAPPINGS = {
     "QwenTTSCloneVoice": QwenTTSCloneVoiceNode,
     "QwenTTSVoiceSelector": QwenTTSVoiceSelectorNode,
     "QwenTTSEmotionScript": QwenTTSEmotionScriptNode,
+    "QwenTTSModels": QwenTTSModelsNode,
     "QwenTTSHealth": QwenTTSHealthNode,
 }
 
@@ -283,5 +333,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "QwenTTSCloneVoice": "Qwen TTS Clone Voice",
     "QwenTTSVoiceSelector": "Qwen TTS Voice Selector",
     "QwenTTSEmotionScript": "Qwen TTS Emotion Script",
+    "QwenTTSModels": "Qwen TTS Models",
     "QwenTTSHealth": "Qwen TTS Health",
 }

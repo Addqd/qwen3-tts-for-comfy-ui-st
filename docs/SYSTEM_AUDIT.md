@@ -27,3 +27,11 @@
 Получение части CIM-данных было запрещено средой, поэтому модель CPU взята из постановки пользователя; логическое число потоков и рабочие ресурсы проверены через Python/psutil. Shared GPU memory достоверно получить без расширенного системного доступа не удалось; вместо этого auto-режим использует dedicated free VRAM и наличие GPU-процессов, не вмешиваясь в них.
 
 Во время CUDA-теста модель увеличила использование VRAM примерно с 0.95 до 3.59 GiB; после остановки только проектного процесса свободная VRAM вернулась примерно к 7.05 GiB.
+
+## Дополнение 2026-08-06: ComfyUI
+
+Официальная ComfyUI Windows Portable NVIDIA `0.30.0` установлена в подпапке проекта `ComfyUI_windows_portable`. Archive прошёл SHA256 и `7z t`; чистый запуск до custom nodes ответил на `/system_stats` только через `127.0.0.1:8188`. Embedded stack: Python 3.13.14, PyTorch 2.13.0+cu130; GPU распознан как RTX 2070 Super. Manager установлен из shipped `manager_requirements.txt` (`comfyui-manager 4.2.2`), `pip check` прошёл.
+
+Семь Qwen TTS нод зарегистрированы в категории `Qwen TTS API`; единственная строка их импорта занимает 0.0 с, `IMPORT FAILED`, `ModuleNotFoundError` и traceback отсутствуют. `qwen_tts` в embedded Python не установлен. Ноды подключены безопасным копированием; junction был отклонён средой. Старые копии хранятся вне сканируемой папки в `ComfyUI\.qwen_tts_api_nodes-backups`.
+
+Измерения одного реального workflow: до сервисов RAM free 34 034 MiB / VRAM used 1 180 MiB; после backend+ComfyUI до синтеза 32 834 MiB / 1 281 MiB; во время Qwen on-demand до 6 268 MiB VRAM; после job 32 907 MiB RAM free / 1 289 MiB VRAM used. Внешние процессы не завершались и не изменялись.

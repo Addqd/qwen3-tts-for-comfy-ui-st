@@ -73,6 +73,15 @@ logging:
 runtime:
   dir: runtime
 
+comfyui:
+  enabled: true
+  install_path: ComfyUI_windows_portable
+  host: 127.0.0.1
+  port: 8188
+  manager_enabled: true
+  startup_timeout_seconds: 180
+  log_path: logs/comfyui.log
+
 integrations:
   sillytavern:
     model: tts-1-ru

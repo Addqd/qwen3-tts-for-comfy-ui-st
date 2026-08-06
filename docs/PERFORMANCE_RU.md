@@ -38,3 +38,7 @@ CPU/CUDA WAV проверены `ffprobe`/soundfile: PCM s16le, mono, 24 кГц,
 - `qwen-emotion-router-real.wav` — настоящий двухсегментный neutral → happy-candidate запрос; HTTP 200, 4.44 с WAV, voice-теги удалены до worker.
 
 Субъективные акцент, сходство, эмоции, артефакты и ударения автоматически не подтверждаются. Их должен оценить пользователь прослушиванием.
+
+## ComfyUI coexistence — 2026-08-06
+
+ComfyUI 0.30.0 с Manager и API-client nodes добавила около 101 MiB VRAM относительно измеренного перед запуском уровня (1 180 → 1 281 MiB); рабочий процесс использовал около 931 MiB RAM. Реальный Queue Prompt с Qwen on-demand достигал 6 268 MiB VRAM used, завершился за 83 с с учётом повторной import-проверки и первой загрузки, создал 15.6 с audio 24 kHz и вернул VRAM к 1 289 MiB. Очередь после job: running 0, pending 0; backend `model_loaded=false`. Эти цифры зависят от внешней графической нагрузки и не являются гарантированным benchmark.

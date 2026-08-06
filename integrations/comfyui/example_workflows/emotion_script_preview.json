@@ -1,0 +1,32 @@
+{
+  "last_node_id": 1,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "QwenTTSEmotionScript",
+      "pos": [120, 100],
+      "size": [520, 300],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "normalized_script", "type": "STRING", "links": null, "slot_index": 0},
+        {"name": "segments", "type": "STRING", "links": null, "slot_index": 1},
+        {"name": "clean_text", "type": "STRING", "links": null, "slot_index": 2},
+        {"name": "recognized_styles", "type": "STRING", "links": null, "slot_index": 3}
+      ],
+      "properties": {"Node name for S&R": "QwenTTSEmotionScript"},
+      "widgets_values": [
+        "[voice:neutral] Тихое начало. [voice:happy] А теперь радостная реплика! [voice:unknown] Неизвестный тег безопасно станет neutral.",
+        "{\"neutral\":\"clone:QwenDemoRussianNeutral\",\"happy\":\"clone:QwenDemoHappyCandidate\"}"
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [],
+  "config": {},
+  "extra": {"info": "Предпросмотр разбора тегов не запускает синтез и не требует WAV."},
+  "version": 0.4
+}

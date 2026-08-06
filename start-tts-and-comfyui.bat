@@ -1,0 +1,25 @@
+@echo off
+setlocal
+chcp 65001 >nul
+pushd "%~dp0"
+
+echo Starting Qwen3-TTS backend and ComfyUI...
+echo A separate ComfyUI Python console will open.
+echo Keep this launcher window open. Close the Python console when you want to stop.
+echo.
+powershell.exe -NoLogo -NoProfile -File "%~dp0scripts\start-tts-and-comfyui.ps1" -VisibleComfyUIConsole -WaitForComfyUIExit
+set "START_EXIT_CODE=%ERRORLEVEL%"
+
+if not "%START_EXIT_CODE%"=="0" (
+    echo.
+    echo Startup failed with exit code %START_EXIT_CODE%.
+    echo Review the messages above and logs in the project logs folder.
+    pause
+    popd
+    exit /b %START_EXIT_CODE%
+)
+
+echo.
+echo Launcher finished. Services started by it have been stopped.
+popd
+endlocal
