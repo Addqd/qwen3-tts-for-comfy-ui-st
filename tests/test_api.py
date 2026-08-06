@@ -77,3 +77,37 @@ def test_metrics_reload_and_fallback(tmp_path):
         assert int(response.headers["x-tts-segments"]) == 2
         assert client.get("/metrics").json()["completed"] == 1
         assert client.post("/admin/reload-voices").status_code == 200
+
+
+def test_long_russian_text_is_chunked_and_json_is_utf8(tmp_path):
+    config = make_test_config(tmp_path)
+    config.data["chunking"]["max_chars"] = 24
+    with TestClient(create_app(config=config)) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.headers["content-type"].startswith("application/json; charset=utf-8")
+        response = client.post("/v1/audio/speech", json={
+            "model": "tts-1-ru",
+            "voice": "clone:TestNeutral",
+            "input": "Первое длинное предложение. Второе длинное предложение!",
+            "response_format": "wav",
+            "speed": 1.0,
+        })
+        assert response.status_code == 200, response.text
+        assert int(response.headers["x-tts-segments"]) >= 2
+
+
+def test_clone_rejects_corrupt_riff_payload(tmp_path):
+    import base64
+
+    payload = {
+        "reference_audio_base64": base64.b64encode(b"RIFF\x04\x00\x00\x00WAVEjunk").decode(),
+        "ref_text": "Точный текст.",
+        "profile_name": "Broken",
+        "character_name": "Test",
+        "consent_confirmed": True,
+    }
+    with TestClient(create_app(config=make_test_config(tmp_path))) as client:
+        response = client.post("/v1/audio/voice-clone", json=payload)
+        assert response.status_code == 422
+        assert "аудио" in response.text

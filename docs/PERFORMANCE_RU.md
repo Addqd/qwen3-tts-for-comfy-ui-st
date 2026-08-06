@@ -27,7 +27,7 @@ CPU/CUDA WAV проверены `ffprobe`/soundfile: PCM s16le, mono, 24 кГц,
 .\scripts\benchmark-coexistence.ps1
 ```
 
-Не запускайте GPU benchmark при малом запасе VRAM. `auto` полезен как policy engine, но не знает измеренную скорость конкретной версии; локальный `config.local.yaml` поэтому вручную задаёт `cpu`.
+Не запускайте GPU benchmark при малом запасе VRAM. `auto` полезен как policy engine, но не знает измеренную скорость конкретной версии. Текущий локальный `config.local.yaml` задаёт `auto`; при необходимости предсказуемого CPU-запуска используйте `config/config.cpu.yaml`.
 
 Артефакты:
 

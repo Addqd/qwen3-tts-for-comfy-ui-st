@@ -52,3 +52,21 @@ def test_emotion_script_parsing():
     assert segments[1]["voice"] == "clone:H"
     assert "[voice:happy]" in normalized
     assert "[voice:happy]" not in clean
+
+
+def test_nodes_report_unavailable_backend(monkeypatch):
+    nodes = load_nodes()
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(nodes, "_json_request", unavailable)
+    server, status = nodes.QwenTTSServerNode().connect("http://127.0.0.1:8020", 1, "tts-1-ru", "wav")
+    assert server["endpoint"] == "http://127.0.0.1:8020"
+    assert status.startswith("unavailable:")
+    voice, available = nodes.QwenTTSVoiceSelectorNode().select(server, "clone:Fallback")
+    assert voice == "clone:Fallback"
+    assert "backend unavailable" in available
+    health = nodes.QwenTTSHealthNode().check(server)
+    assert health[0] is False
+    assert health[1] == "unknown"

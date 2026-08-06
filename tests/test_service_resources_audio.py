@@ -56,3 +56,18 @@ def test_auto_resource_modes(monkeypatch, tmp_path):
     assert choose_mode(cfg)[0] == "cuda_on_demand"
     monkeypatch.setattr("qwen3_tts_st.resources.snapshot", lambda _=0: snap(7000, 0))
     assert choose_mode(cfg)[0] == "cuda"
+
+
+def test_config_rejects_non_localhost(tmp_path):
+    data = deepcopy(load_config().data)
+    data["server"]["host"] = "0.0.0.0"
+    with pytest.raises(ValueError, match="127.0.0.1"):
+        AppConfig(data, tmp_path / "unsafe.yaml")
+
+
+def test_service_shutdown_unloads_worker(tmp_path, monkeypatch):
+    service = TTSService(config_with(tmp_path))
+    called = []
+    monkeypatch.setattr(service.worker, "unload", lambda: called.append(True))
+    service.shutdown()
+    assert called == [True]
