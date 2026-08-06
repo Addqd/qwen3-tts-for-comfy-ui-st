@@ -34,7 +34,7 @@ Backend вместе с установленной ComfyUI:
 # без -SkipSynthesis выполняется реальный короткий Qwen workflow
 ```
 
-ComfyUI: `http://127.0.0.1:8188`. Краткая инструкция: [docs/COMFYUI_QUICKSTART_RU.md](docs/COMFYUI_QUICKSTART_RU.md).
+Для запуска двойным щелчком используйте `start-tts-and-comfyui.bat` в корне проекта. Он вызывает тот же PowerShell-скрипт и оставляет видимой консоль ComfyUI. ComfyUI: `http://127.0.0.1:8188`. Краткая инструкция: [docs/COMFYUI_QUICKSTART_RU.md](docs/COMFYUI_QUICKSTART_RU.md).
 
 ## Повторная установка
 

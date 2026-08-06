@@ -38,6 +38,8 @@ Qwen-модель не загружается в ComfyUI. Ноды катего�
 .\stop.ps1
 ```
 
+Самый простой вариант — дважды щёлкнуть `start-tts-and-comfyui.bat` в Проводнике. BAT переходит в каталог проекта, запускает тот же `scripts\start-tts-and-comfyui.ps1` и просит показать отдельную консоль ComfyUI. Он не изменяет системную Execution Policy.
+
 PID backend хранится в `runtime/server.json`, PID ComfyUI — в `runtime/comfyui.json`. Stop-скрипты сверяют PID и время запуска и не завершают чужие Python-процессы. Лог скрытого запуска: `logs/comfyui.log` и `logs/comfyui.err.log`; Manager также пишет `ComfyUI\user\comfyui.log`.
 
 Manager 4.2.2 установлен официальной командой из `ComfyUI\manager_requirements.txt` и включается флагом `--enable-manager`. Отключить его разово можно `start-comfyui.ps1 -NoManager`, постоянно — `manager_enabled: false` в игнорируемом `config/config.local.yaml`.
