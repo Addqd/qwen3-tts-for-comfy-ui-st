@@ -16,7 +16,9 @@ profiles/<character>/<style>/
 
 Безопасный импорт можно сделать через `POST /v1/audio/voice-clone` или ноду **Qwen TTS Clone Voice**. Требуется `consent_confirmed=true`; существующий профиль не перезаписывается без `overwrite=true`. API сначала проверяет RIFF/WAVE, длительность, sample rate, каналы, peak/RMS, грубую оценку шума и транскрипцию. Оценка шума эвристическая и может дать предупреждение на выразительной речи.
 
-Для одного персонажа запишите отдельные разрешённые референсы: neutral, soft, whisper, breathy, happy, sad, angry, tense. Не создавайте их простой сменой названия одного WAV: emotion router переносит подачу именно из записи. При отсутствии стиля используется neutral.
+Для воспроизводимой локальной подготовки открытых тестовых samples используйте `scripts/prepare_voice_samples.py`, а для создания только primary test profiles — `scripts/create_test_voice_profiles.py --consent-confirmed`. Аудио и созданные profiles остаются в игнорируемых `local_voice_samples` и `voice_library/profiles`; пример manifest без реального WAV находится в `config/voice_samples.example.json`. Подробности: [../docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md](../docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md).
+
+Для одного персонажа запишите отдельные разрешённые референсы: neutral, soft, whisper, breathy, happy, sad, angry, tense. Не создавайте их простой сменой названия одного WAV: emotion router переносит подачу именно из записи. При отсутствии style используется base profile запроса, поэтому base рекомендуется задавать neutral.
 
 Текущие demo-профили:
 

@@ -28,6 +28,10 @@ Workflow-примеры:
 - `backend_health_and_voices.json`;
 - `emotion_script_preview.json`;
 - `text_to_speech_ru.json`;
-- `voice_clone_and_synthesize_ru.json` — не запускать без разрешённого WAV и точной транскрипции.
+- `voice_clone_and_synthesize_ru.json` — не запускать без разрешённого WAV и точной транскрипции;
+- `voice_profile_from_wav_ru.json` — регистрация профиля и контрольный AUDIO;
+- `emotion_router_test_ru.json` — preview segments/profiles и объединённый AUDIO;
+- `compare_voice_samples_ru.json` — три reference WAV и раздельное сохранение результатов;
+- `text_to_speech_with_emotions_ru.json` — готовая много-сегментная схема.
 
-Подробная инструкция: [../../docs/COMFYUI_SETUP_RU.md](../../docs/COMFYUI_SETUP_RU.md). Endpoint намеренно принимает только `http://127.0.0.1:<port>`.
+Подробные инструкции: [../../docs/COMFYUI_SETUP_RU.md](../../docs/COMFYUI_SETUP_RU.md) и [../../docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md](../../docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md). Endpoint намеренно принимает только `http://127.0.0.1:<port>`.
