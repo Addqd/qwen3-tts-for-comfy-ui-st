@@ -1,0 +1,11 @@
+{
+  "character": "QwenDemo",
+  "profile_id": "QwenDemoHappyCandidate",
+  "display_name": "QwenDemoHappyCandidate",
+  "style": "happy",
+  "reference_audio": "reference.wav",
+  "ref_text": "Ах, как же это замечательно! Вот это да!",
+  "language": "Russian",
+  "clone_mode": "icl",
+  "notes": "Синтетический технический happy candidate; эмоциональность не подтверждена прослушиванием."
+}

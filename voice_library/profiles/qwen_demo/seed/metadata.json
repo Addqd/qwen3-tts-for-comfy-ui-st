@@ -1,0 +1,12 @@
+{
+  "character": "QwenDemo",
+  "profile_id": "qwen_demo_seed",
+  "display_name": "QwenDemoSeed",
+  "style": "neutral",
+  "reference_audio": "reference.wav",
+  "ref_text": "Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you.",
+  "language": "English",
+  "clone_mode": "icl",
+  "notes": "Официальный публичный demo-референс Qwen; используется только для технической проверки и получения синтетического русского demo-профиля."
+}
+

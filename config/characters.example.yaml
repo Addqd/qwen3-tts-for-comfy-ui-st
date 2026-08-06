@@ -1,0 +1,13 @@
+characters:
+  ExampleCharacter:
+    default_style: neutral
+    profiles:
+      neutral: clone:ExampleCharacterNeutral
+      soft: clone:ExampleCharacterSoft
+      whisper: clone:ExampleCharacterWhisper
+      breathy: clone:ExampleCharacterBreathy
+      happy: clone:ExampleCharacterHappy
+      sad: clone:ExampleCharacterSad
+      angry: clone:ExampleCharacterAngry
+      tense: clone:ExampleCharacterTense
+

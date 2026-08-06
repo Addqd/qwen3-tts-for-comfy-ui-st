@@ -1,0 +1,6 @@
+resources:
+  mode: cpu
+model:
+  dtype: float32
+  attention: sdpa
+

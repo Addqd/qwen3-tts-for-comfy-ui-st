@@ -1,0 +1,11 @@
+{
+  "character": "QwenDemo",
+  "profile_id": "QwenDemoRussianNeutral",
+  "display_name": "QwenDemoRussianNeutral",
+  "style": "neutral",
+  "reference_audio": "reference.wav",
+  "ref_text": "Здравствуйте. Это первый русский тест Qwen три TTS.",
+  "language": "Russian",
+  "clone_mode": "icl",
+  "notes": ""
+}

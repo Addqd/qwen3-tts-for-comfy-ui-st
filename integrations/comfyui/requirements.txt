@@ -1,0 +1,2 @@
+# No third-party packages. The nodes use Python stdlib, NumPy and ComfyUI's own AUDIO loader.
+

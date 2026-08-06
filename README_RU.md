@@ -1,0 +1,87 @@
+# Локальная Qwen3-TTS для Windows
+
+Один локальный backend загружает `Qwen/Qwen3-TTS-12Hz-0.6B-Base` и обслуживает SillyTavern, ComfyUI и другие OpenAI-compatible TTS-клиенты через `127.0.0.1:8020`. Модель не загружается в ComfyUI и не связана с используемой LLM.
+
+## Что уже проверено на этой машине
+
+- Python 3.12 `.venv`, `qwen-tts 0.1.1`, `transformers 4.57.3`.
+- Настоящая модель скачана в `model_cache` и дважды синтезировала русский WAV на CPU.
+- Русский ICL-профиль `clone:QwenDemoRussianNeutral` создан через API из синтетического теста.
+- OpenAI-compatible WAV и настоящий Qwen SillyTavern-shaped MP3 запросы получили корректный аудиоответ.
+- ComfyUI API-нода получила WAV и вернула `AUDIO` формы `[batch, channels, samples]`.
+- CUDA FP32/SDPA и on-demand реально синтезируют; persistent после загрузки дал 5.53 с вычисления для 2.24 с WAV. FP16 на RTX 2070 Super не завершил ограниченную генерацию за 5 минут. `auto` выбирает FP32 on-demand при безопасном запасе VRAM и CPU при нехватке.
+
+Это техническая проверка, не оценка качества голоса. Прослушайте файлы из `artifacts/audio-tests`.
+
+## Быстрый запуск
+
+В корне проекта:
+
+```powershell
+.\start.ps1
+.\status.ps1
+.\scripts\test-russian.ps1
+.\stop.ps1
+```
+
+`start.ps1` использует локальный `config/config.local.yaml` и слушает только `127.0.0.1`. Swagger: `http://127.0.0.1:8020/docs`; health: `http://127.0.0.1:8020/health`.
+
+## Повторная установка
+
+Нужен CPython 3.12. На этой системе `py` не содержит установленного Python, поэтому путь передаётся явно:
+
+```powershell
+.\scripts\install.ps1 -Python "C:\path\to\Python312\python.exe" -TorchVariant CPU
+```
+
+Для экспериментальной CUDA 12.6 сборки:
+
+```powershell
+.\scripts\install.ps1 -Python "C:\path\to\Python312\python.exe" -TorchVariant CUDA126
+```
+
+Скрипт создаёт только `.venv` проекта, пишет лог в `logs`, использует `uv`, проверяет импорты и зависимости. Модель скачивается при первом реальном запросе.
+
+## API
+
+```powershell
+$body = @{
+  model = "tts-1-ru"
+  voice = "clone:QwenDemoRussianNeutral"
+  input = "Русский текст для озвучивания."
+  response_format = "wav"
+  speed = 1.0
+} | ConvertTo-Json
+Invoke-WebRequest -Uri http://127.0.0.1:8020/v1/audio/speech `
+  -Method Post -ContentType "application/json; charset=utf-8" `
+  -Body ([Text.Encoding]::UTF8.GetBytes($body)) -OutFile result.wav
+```
+
+Endpoints: `GET /health`, `/v1/models`, `/v1/voices`, `/metrics`; `POST /v1/audio/speech`, `/v1/audio/voice-clone`, `/admin/reload-voices`.
+
+## Голоса и эмоции
+
+Для наилучшего подтверждённого режима используйте русский WAV и его точную дословную расшифровку (`clone_mode: icl`). Добавление и проверка описаны в [voice_library/README_RU.md](voice_library/README_RU.md). Клонируйте только голос, на использование которого есть разрешение.
+
+Эмоции реализованы отдельными референсами одного персонажа: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Теги вида `[voice:happy]` удаляются из речи и маршрутизируют сегмент к соответствующему профилю; при отсутствии профиля используется neutral.
+
+## Интеграции
+
+- [SillyTavern](docs/SILLYTAVERN_SETUP_RU.md)
+- [ComfyUI](docs/COMFYUI_SETUP_RU.md)
+- Workflow JSON: `integrations/comfyui/example_workflows`
+
+Установщик ComfyUI требует точный путь и подтверждение. Ничего в существующей ComfyUI или SillyTavern автоматически не изменялось.
+
+## Режимы
+
+- `CPU`: подтверждён, `scripts/start-tts-cpu.ps1`.
+- `CUDA`: подтверждён только FP32/SDPA, `scripts/start-tts-gpu.ps1`; persistent занимает суммарно около 6.4 ГБ VRAM.
+- `CUDA on demand`: подтверждён FP32 inference и фактический возврат VRAM.
+- `auto`: подтверждён; оценивает VRAM/RAM/GPU-процессы, выбирает on-demand при внешних GPU-клиентах и пишет причину.
+
+Результаты и команды: [docs/PERFORMANCE_RU.md](docs/PERFORMANCE_RU.md). Диагностика: `.\scripts\diagnose.ps1` и [docs/TROUBLESHOOTING_RU.md](docs/TROUBLESHOOTING_RU.md).
+
+## Обновление и резервная копия
+
+Перед обновлением сохраните `config/config.local.yaml` и весь `voice_library/profiles`. Не удаляйте `reference.wav`: точная транскрипция связана именно с ним. После обновления снова выполните install, тесты и один контрольный WAV. `model_cache`, `.venv`, логи и runtime можно восстановить, голоса — нет.

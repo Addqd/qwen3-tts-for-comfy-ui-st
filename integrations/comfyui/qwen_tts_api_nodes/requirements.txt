@@ -1,0 +1,2 @@
+# Intentionally empty: do not install backend torch/transformers/qwen-tts into ComfyUI.
+

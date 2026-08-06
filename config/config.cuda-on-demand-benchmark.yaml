@@ -1,0 +1,8 @@
+resources:
+  mode: cuda_on_demand
+model:
+  dtype: float32
+  attention: sdpa
+  max_new_tokens: 64
+queue:
+  generation_timeout_seconds: 120

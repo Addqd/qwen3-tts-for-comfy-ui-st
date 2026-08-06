@@ -1,0 +1,12 @@
+{
+  "character": "ExampleCharacter",
+  "profile_id": "example_character_neutral",
+  "display_name": "ExampleCharacterNeutral",
+  "style": "neutral",
+  "reference_audio": "reference.wav",
+  "ref_text": "Точная дословная расшифровка разрешённой записи.",
+  "language": "Russian",
+  "clone_mode": "icl",
+  "notes": "Шаблон: добавьте разрешённый reference.wav."
+}
+

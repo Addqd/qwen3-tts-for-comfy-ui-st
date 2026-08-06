@@ -1,0 +1,6 @@
+resources:
+  mode: cuda
+model:
+  dtype: float16
+  attention: sdpa
+  max_new_tokens: 256

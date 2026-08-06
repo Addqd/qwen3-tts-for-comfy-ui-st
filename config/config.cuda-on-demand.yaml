@@ -1,0 +1,5 @@
+resources:
+  mode: cuda_on_demand
+model:
+  dtype: float32
+  attention: sdpa

@@ -1,0 +1,46 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local configuration and secrets
+config/config.local.yaml
+.env
+*.key
+
+# Models and caches
+models/
+model_cache/
+.cache/
+huggingface/
+
+# Runtime and logs
+runtime/
+logs/
+*.pid
+*.log
+
+# Generated/private voice data
+voice_library/inbox/*
+voice_library/profiles/**/reference.wav
+!voice_library/inbox/.gitkeep
+
+# Generated artifacts
+artifacts/audio-tests/*
+!artifacts/audio-tests/.gitkeep
+artifacts/benchmarks/
+temp/
+tmp/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

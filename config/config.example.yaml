@@ -1,0 +1,82 @@
+server:
+  host: 127.0.0.1
+  port: 8020
+
+model:
+  backend: qwen
+  id: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+  cache_dir: model_cache
+  # Turing validation: float16 stalled; float32 completed repeatedly.
+  dtype: float32
+  attention: sdpa
+  max_new_tokens: 2048
+
+resources:
+  mode: auto
+  gpu:
+    enabled: true
+    device: 0
+    minimum_free_vram_mb: 6000
+    safety_reserve_mb: 750
+    reject_shared_memory_pressure: true
+  cpu:
+    enabled: true
+    max_threads: auto
+    reserve_threads: 2
+  ram:
+    safety_reserve_mb: 4096
+  external_ai:
+    monitor_only: true
+    process_names: []
+    gpu_reserve_mb: 0
+    cpu_reserve_threads: 0
+    ram_reserve_mb: 0
+
+voices:
+  library_dir: voice_library
+  fallback_profile: clone:QwenDemoRussianNeutral
+
+queue:
+  max_concurrent: 1
+  max_waiting: 4
+  wait_timeout_seconds: 30
+  generation_timeout_seconds: 900
+
+chunking:
+  enabled: true
+  max_chars: 320
+
+pauses:
+  sentence_ms: 80
+  paragraph_ms: 220
+  segment_ms: 120
+  crossfade_ms: 8
+
+preprocessing:
+  mode: all
+  remove_markdown: true
+  remove_html: true
+  remove_chatml: true
+  remove_think_blocks: true
+  remove_code_blocks: true
+  russian_abbreviations:
+    "т.е.": "то есть"
+    "т.к.": "так как"
+    "и т.д.": "и так далее"
+    "и т.п.": "и тому подобное"
+
+logging:
+  level: INFO
+  access_log: false
+  log_full_text: false
+
+runtime:
+  dir: runtime
+
+integrations:
+  sillytavern:
+    model: tts-1-ru
+    response_format: mp3
+  comfyui:
+    endpoint: http://127.0.0.1:8020
+    timeout_seconds: 900
