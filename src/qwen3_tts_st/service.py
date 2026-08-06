@@ -113,6 +113,7 @@ class TTSService:
             base = self.library.resolve(request.voice, str(self.config.get("voices.fallback_profile", "")) or None)
             parts = []
             all_metrics = []
+            selected_voices = []
             max_chars = int(self.config.get("chunking.max_chars", 320))
             for segment in segments:
                 profile = self.library.find_style(base.character, segment.style, base)
@@ -126,6 +127,7 @@ class TTSService:
                         )
                     parts.append((waveform, sample_rate))
                     all_metrics.append(metrics)
+                    selected_voices.append(profile.voice_id)
             waveform, sample_rate = stitch(
                 parts,
                 pause_ms=int(self.config.get("pauses.segment_ms", 120)),
@@ -139,6 +141,7 @@ class TTSService:
                 "sample_rate": sample_rate,
                 "segments": len(parts),
                 "styles": [segment.style for segment in segments],
+                "voices": selected_voices,
                 "generation": all_metrics,
             }
             self.last_metrics = metadata
@@ -155,4 +158,3 @@ class TTSService:
 
     def shutdown(self) -> None:
         self.worker.unload()
-

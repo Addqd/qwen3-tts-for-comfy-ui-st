@@ -4,7 +4,8 @@ from dataclasses import asdict, dataclass
 import re
 
 
-TAG_RE = re.compile(r"\[voice:(neutral|soft|whisper|breathy|happy|sad|angry|tense)\]", re.I)
+ALLOWED_STYLES = {"neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense"}
+TAG_RE = re.compile(r"\[voice:([a-z][a-z0-9_-]*)\]", re.I)
 
 
 @dataclass
@@ -28,7 +29,8 @@ def parse_emotion_script(text: str, default_style: str = "neutral") -> list[Emot
         preceding = text[cursor:match.start()].strip()
         if preceding:
             segments.append(EmotionSegment(style, preceding))
-        style = match.group(1).lower()
+        requested_style = match.group(1).lower()
+        style = requested_style if requested_style in ALLOWED_STYLES else "neutral"
         cursor = match.end()
     trailing = text[cursor:].strip()
     if trailing:
@@ -38,4 +40,3 @@ def parse_emotion_script(text: str, default_style: str = "neutral") -> list[Emot
 
 def strip_voice_tags(text: str) -> str:
     return TAG_RE.sub("", text).strip()
-
