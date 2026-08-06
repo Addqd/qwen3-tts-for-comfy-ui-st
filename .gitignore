@@ -30,6 +30,7 @@ logs/
 *.log
 
 # Generated/private voice data
+local_voice_samples/
 voice_library/inbox/*
 voice_library/profiles/
 voice_library/profiles/**/reference.wav
@@ -44,6 +45,7 @@ tmp/
 *.wav
 *.mp3
 *.flac
+*.ogg
 *.opus
 
 # IDE / OS

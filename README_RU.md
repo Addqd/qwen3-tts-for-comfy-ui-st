@@ -73,11 +73,14 @@ Endpoints: `GET /health`, `/v1/models`, `/v1/voices`, `/metrics`; `POST /v1/audi
 
 Для наилучшего подтверждённого режима используйте русский WAV и его точную дословную расшифровку (`clone_mode: icl`). Добавление и проверка описаны в [voice_library/README_RU.md](voice_library/README_RU.md). Клонируйте только голос, на использование которого есть разрешение.
 
-Эмоции реализованы отдельными референсами одного персонажа: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Теги вида `[voice:happy]` удаляются из речи и маршрутизируют сегмент к соответствующему профилю; при отсутствии профиля используется neutral.
+Эмоции реализованы отдельными референсами одного персонажа: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Теги вида `[voice:happy]` удаляются до worker и маршрутизируют сегмент к соответствующему профилю. Неизвестный корректный тег становится `neutral`; отсутствующий style использует request base profile, поэтому base рекомендуется задавать neutral.
+
+Подготовка открытых русских samples, 15 временных test profiles и пошаговая работа в ComfyUI: [docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md](docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md). Доказательный аудит Router: [docs/EMOTION_ROUTER_AUDIT_RU.md](docs/EMOTION_ROUTER_AUDIT_RU.md).
 
 ## Интеграции
 
-- [SillyTavern](docs/SILLYTAVERN_SETUP_RU.md)
+- [SillyTavern API-настройка](docs/SILLYTAVERN_SETUP_RU.md)
+- [План будущей эмоциональной интеграции SillyTavern](docs/SILLYTAVERN_INTEGRATION_PLAN_RU.md)
 - [ComfyUI](docs/COMFYUI_SETUP_RU.md)
 - Workflow JSON: `integrations/comfyui/example_workflows`
 

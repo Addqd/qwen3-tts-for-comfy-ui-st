@@ -1,0 +1,15 @@
+{
+  "last_node_id": 4,
+  "last_link_id": 4,
+  "nodes": [
+    {"id": 1, "type": "QwenTTSServer", "pos": [40, 60], "size": [360, 180], "flags": {}, "order": 0, "mode": 0, "inputs": [], "outputs": [{"name": "server", "type": "QWEN_TTS_SERVER", "links": [1], "slot_index": 0}, {"name": "status", "type": "STRING", "links": null, "slot_index": 1}], "properties": {"Node name for S&R": "QwenTTSServer"}, "widgets_values": ["http://127.0.0.1:8020", 900, "tts-1-ru", "wav"]},
+    {"id": 2, "type": "QwenTTSEmotionScript", "pos": [40, 320], "size": [560, 340], "flags": {}, "order": 1, "mode": 0, "inputs": [], "outputs": [{"name": "normalized_script", "type": "STRING", "links": [2], "slot_index": 0}, {"name": "segments", "type": "STRING", "links": null, "slot_index": 1}, {"name": "clean_text", "type": "STRING", "links": null, "slot_index": 2}, {"name": "recognized_styles", "type": "STRING", "links": null, "slot_index": 3}], "properties": {"Node name for S&R": "QwenTTSEmotionScript"}, "widgets_values": ["[voice:neutral] Добрый вечер. [voice:whisper] Я скажу это тише. [voice:happy] А теперь хорошие новости! [voice:tense] Но впереди трудный выбор.", "{\"neutral\":\"clone:test_ru_dima_neutral\",\"whisper\":\"clone:test_ru_dima_whisper\",\"happy\":\"clone:test_ru_dima_happy\",\"tense\":\"clone:test_ru_dima_tense\"}"]},
+    {"id": 3, "type": "QwenTTSSynthesize", "pos": [700, 100], "size": [480, 360], "flags": {}, "order": 2, "mode": 0, "inputs": [{"name": "server", "type": "QWEN_TTS_SERVER", "link": 1}, {"name": "emotion_script", "type": "STRING", "link": 2}], "outputs": [{"name": "audio", "type": "AUDIO", "links": [4], "slot_index": 0}, {"name": "temporary_path", "type": "STRING", "links": null, "slot_index": 1}, {"name": "metadata", "type": "STRING", "links": null, "slot_index": 2}, {"name": "duration", "type": "FLOAT", "links": null, "slot_index": 3}], "properties": {"Node name for S&R": "QwenTTSSynthesize"}, "widgets_values": ["Резервный текст.", "clone:test_ru_dima_neutral", 1.0, "tts-1-ru", "wav", "all"]},
+    {"id": 4, "type": "PreviewAudio", "pos": [1270, 130], "size": [320, 110], "flags": {}, "order": 3, "mode": 0, "inputs": [{"name": "audio", "type": "AUDIO", "link": 4}], "outputs": [], "properties": {"Node name for S&R": "PreviewAudio"}, "widgets_values": []}
+  ],
+  "links": [[1, 1, 0, 3, 0, "QWEN_TTS_SERVER"], [2, 2, 0, 3, 7, "STRING"], [4, 3, 0, 4, 0, "AUDIO"]],
+  "groups": [],
+  "config": {},
+  "extra": {"info": "Backend удаляет теги, синтезирует сегменты профилями одной голосовой семьи и возвращает один объединённый WAV."},
+  "version": 0.4
+}

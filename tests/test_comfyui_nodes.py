@@ -47,16 +47,25 @@ def test_example_workflows_are_valid_json_with_available_node_types():
     nodes = load_nodes()
     required = {
         "backend_health_and_voices.json",
+        "compare_voice_samples_ru.json",
+        "emotion_router_test_ru.json",
         "emotion_script_preview.json",
         "text_to_speech_ru.json",
+        "text_to_speech_with_emotions_ru.json",
+        "voice_profile_from_wav_ru.json",
         "voice_clone_and_synthesize_ru.json",
     }
     paths = {path.name: path for path in WORKFLOW_DIR.glob("*.json")}
     assert required <= paths.keys()
-    builtins = {"LoadAudio", "PreviewAudio"}
+    builtins = {"LoadAudio", "PreviewAudio", "SaveAudio"}
     for path in paths.values():
         workflow = json.loads(path.read_text(encoding="utf-8"))
         assert workflow["nodes"]
+        node_ids = {node["id"] for node in workflow["nodes"]}
+        link_ids = {link[0] for link in workflow["links"]}
+        assert workflow["last_node_id"] >= max(node_ids)
+        assert workflow["last_link_id"] >= max(link_ids, default=0)
+        assert all(link[1] in node_ids and link[3] in node_ids for link in workflow["links"])
         types = {node["type"] for node in workflow["nodes"]}
         assert types <= set(nodes.NODE_CLASS_MAPPINGS) | builtins
 
