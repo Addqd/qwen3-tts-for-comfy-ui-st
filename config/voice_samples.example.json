@@ -1,0 +1,37 @@
+{
+  "dataset": {
+    "name": "Example public voice dataset",
+    "source_url": "https://example.invalid/dataset",
+    "revision": "pin-a-real-immutable-revision",
+    "license": "Specify the exact license",
+    "license_url": "https://example.invalid/license",
+    "consent_evidence": "Record the source's explicit consent statement or reject the source.",
+    "source_csv": "downloaded/example/metadata/test.csv",
+    "source_audio_root": "downloaded/example/original/wavs",
+    "csv_delimiter": "|"
+  },
+  "voice_families": [
+    {
+      "voice_family": "test_ru_example",
+      "speaker_id": "speaker-01",
+      "character_name": "TestRuExample",
+      "samples": [
+        {
+          "sample_id": "test_ru_example_neutral_01",
+          "original_filename": "example.wav",
+          "source_emotion": "neutral",
+          "mapped_emotion": "neutral",
+          "selection_status": "primary",
+          "confidence": "high"
+        }
+      ]
+    }
+  ],
+  "unfilled_styles": [
+    {
+      "voice_family": "test_ru_example",
+      "mapped_emotion": "breathy",
+      "reason": "No reliable same-speaker reference was found."
+    }
+  ]
+}
