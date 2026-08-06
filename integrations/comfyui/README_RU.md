@@ -15,8 +15,8 @@
 Установка на проверенную Portable:
 
 ```powershell
-.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath "D:\Folder\ia\ComfyUI_windows_portable" -Mode Copy -WhatIf
-.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath "D:\Folder\ia\ComfyUI_windows_portable" -Mode Copy -ReplaceExisting
+.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable" -Mode Copy -WhatIf
+.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable" -Mode Copy -ReplaceExisting
 .\scripts\start-tts-and-comfyui.ps1
 .\scripts\test-comfyui-integration.ps1 -SkipSynthesis
 ```

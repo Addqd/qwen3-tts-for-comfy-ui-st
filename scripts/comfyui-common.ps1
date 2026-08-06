@@ -13,7 +13,7 @@ import json, sys
 c = load_config(sys.argv[1])
 print(json.dumps({
     'enabled': bool(c.get('comfyui.enabled', True)),
-    'install_path': str(c.get('comfyui.install_path', '')),
+    'install_path': str(c.path('comfyui.install_path', 'ComfyUI_windows_portable')),
     'host': str(c.get('comfyui.host', '127.0.0.1')),
     'port': int(c.get('comfyui.port', 8188)),
     'manager_enabled': bool(c.get('comfyui.manager_enabled', True)),

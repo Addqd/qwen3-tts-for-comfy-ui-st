@@ -75,7 +75,7 @@ runtime:
 
 comfyui:
   enabled: true
-  install_path: ""
+  install_path: ComfyUI_windows_portable
   host: 127.0.0.1
   port: 8188
   manager_enabled: true

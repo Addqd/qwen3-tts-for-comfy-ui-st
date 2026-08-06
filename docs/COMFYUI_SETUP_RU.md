@@ -1,6 +1,6 @@
 # ComfyUI и Qwen3-TTS: подробная инструкция
 
-Проверено 6 августа 2026 года на официальной ComfyUI Windows Portable NVIDIA `0.30.0`. Локальная установка находится в `D:\Folder\ia\ComfyUI_windows_portable`, интерфейс открывается только на `http://127.0.0.1:8188`, TTS backend — на `http://127.0.0.1:8020`.
+Проверено 6 августа 2026 года на официальной ComfyUI Windows Portable NVIDIA `0.30.0`. Локальная установка находится в подпапке проекта `ComfyUI_windows_portable`, интерфейс открывается только на `http://127.0.0.1:8188`, TTS backend — на `http://127.0.0.1:8020`. Путь в конфигурации относительный, поэтому весь `qwen3-tts-st` можно переносить как одну папку.
 
 ## Что здесь работает
 
@@ -100,16 +100,16 @@ Manager 4.2.2 установлен официальной командой из 
 На этой машине использовано безопасное копирование: junction был заблокирован средой. Перед изменением всегда проверяйте `-WhatIf`:
 
 ```powershell
-.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath "D:\Folder\ia\ComfyUI_windows_portable" -Mode Copy -WhatIf
-.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath "D:\Folder\ia\ComfyUI_windows_portable" -Mode Copy -ReplaceExisting
+.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable" -Mode Copy -WhatIf
+.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable" -Mode Copy -ReplaceExisting
 .\scripts\test-comfyui-integration.ps1 -SkipSynthesis
 ```
 
 При `-ReplaceExisting` старая копия перемещается в `ComfyUI\.qwen_tts_api_nodes-backups`, то есть вне сканируемого `custom_nodes`. Uninstall удаляет только цель, подтверждённую marker-файлом:
 
 ```powershell
-.\scripts\uninstall-comfyui-nodes.ps1 -ComfyUIPath "D:\Folder\ia\ComfyUI_windows_portable" -WhatIf
-.\scripts\uninstall-comfyui-nodes.ps1 -ComfyUIPath "D:\Folder\ia\ComfyUI_windows_portable"
+.\scripts\uninstall-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable" -WhatIf
+.\scripts\uninstall-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable"
 ```
 
 ## Безопасное обновление ComfyUI

@@ -20,3 +20,5 @@ Base 0.6B не получает выдуманные style-инструкции.
 Привязка сервера к `127.0.0.1` проверяется и в конфиге, и launcher-скриптом. API-ключ локальному backend не нужен; публикация наружу архитектурой не предусмотрена.
 
 ComfyUI 0.30.0 работает отдельным процессом на `127.0.0.1:8188`. `scripts/start-tts-and-comfyui.ps1` не создаёт вторую копию уже готового сервиса; PID каждого процесса хранится раздельно. Custom nodes вызывают только backend endpoints, а результаты output-nodes публикуют в стандартной форме `ui + result`, поэтому они доступны downstream-соединениям и в `/history/{prompt_id}`. Реальный путь проверки: `/prompt` → Qwen TTS nodes → backend → on-demand Qwen worker → ComfyUI `PreviewAudio` → execution history.
+
+Windows Portable хранится в `ComfyUI_windows_portable` внутри корня проекта. Значение `comfyui.install_path` задаётся относительно корня и при загрузке конфигурации преобразуется в абсолютный путь. Поэтому `.venv`, backend, ComfyUI, embedded Python, Manager и custom nodes перемещаются вместе с папкой `qwen3-tts-st`; тяжёлая подпапка ComfyUI исключена из Git.
