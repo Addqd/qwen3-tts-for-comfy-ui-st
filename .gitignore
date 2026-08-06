@@ -12,6 +12,7 @@ build/
 # Local configuration and secrets
 config/config.local.yaml
 .env
+.env.*
 *.key
 
 # Models and caches
@@ -19,6 +20,8 @@ models/
 model_cache/
 .cache/
 huggingface/
+ComfyUI_windows_portable/
+python_embeded/
 
 # Runtime and logs
 runtime/
@@ -28,6 +31,7 @@ logs/
 
 # Generated/private voice data
 voice_library/inbox/*
+voice_library/profiles/
 voice_library/profiles/**/reference.wav
 !voice_library/inbox/.gitkeep
 
@@ -37,6 +41,10 @@ artifacts/audio-tests/*
 artifacts/benchmarks/
 temp/
 tmp/
+*.wav
+*.mp3
+*.flac
+*.opus
 
 # IDE / OS
 .vscode/
