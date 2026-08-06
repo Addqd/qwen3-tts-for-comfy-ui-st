@@ -81,7 +81,7 @@ Endpoints: `GET /health`, `/v1/models`, `/v1/voices`, `/metrics`; `POST /v1/audi
 - [ComfyUI](docs/COMFYUI_SETUP_RU.md)
 - Workflow JSON: `integrations/comfyui/example_workflows`
 
-Официальная ComfyUI Windows Portable NVIDIA `0.30.0` находится в подпапке `ComfyUI_windows_portable` внутри корня проекта. Весь проект можно переносить одной папкой: конфигурация использует относительный путь. Доступны Server, Health, Models, Voice Selector, Emotion Script, Synthesize и Clone Voice. Ноды установлены копированием и не содержат Qwen/torch/transformers; Qwen-модель остаётся только в backend. SillyTavern не изменялась.
+Официальная ComfyUI Windows Portable NVIDIA `0.30.0` находится в подпапке `ComfyUI_windows_portable` внутри корня проекта. На этом компьютере проект можно перемещать одной папкой: конфигурация использует относительный путь. При переносе на другой компьютер обычный `.venv` может потребовать пересоздания под установленный там Python; embedded Python ComfyUI остаётся самодостаточным. Доступны Server, Health, Models, Voice Selector, Emotion Script, Synthesize и Clone Voice. Ноды установлены копированием и не содержат Qwen/torch/transformers; Qwen-модель остаётся только в backend. SillyTavern не изменялась.
 
 ## Режимы
 
