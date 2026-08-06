@@ -4,7 +4,10 @@ chcp 65001 >nul
 pushd "%~dp0"
 
 echo Starting Qwen3-TTS backend and ComfyUI...
-powershell.exe -NoLogo -NoProfile -File "%~dp0scripts\start-tts-and-comfyui.ps1" -VisibleComfyUIConsole
+echo A separate ComfyUI Python console will open.
+echo Keep this launcher window open. Close the Python console when you want to stop.
+echo.
+powershell.exe -NoLogo -NoProfile -File "%~dp0scripts\start-tts-and-comfyui.ps1" -VisibleComfyUIConsole -WaitForComfyUIExit
 set "START_EXIT_CODE=%ERRORLEVEL%"
 
 if not "%START_EXIT_CODE%"=="0" (
@@ -17,10 +20,6 @@ if not "%START_EXIT_CODE%"=="0" (
 )
 
 echo.
-echo Services are ready:
-echo   TTS backend: http://127.0.0.1:8020
-echo   ComfyUI:     http://127.0.0.1:8188
-echo.
-echo You can close this window. Use stop.ps1 and scripts\stop-comfyui.ps1 to stop the services.
+echo Launcher finished. Services started by it have been stopped.
 popd
 endlocal

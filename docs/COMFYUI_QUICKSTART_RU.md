@@ -1,7 +1,7 @@
 # ComfyUI Quick Start
 
 1. Откройте папку `qwen3-tts-st` в Проводнике и дважды щёлкните `start-tts-and-comfyui.bat`. Альтернатива из PowerShell: `.\scripts\start-tts-and-comfyui.ps1 -VisibleComfyUIConsole`.
-2. Не закрывайте отдельную консоль ComfyUI во время работы; стартовое BAT-окно после сообщения о готовности можно закрыть.
+2. Оставьте открытыми BAT-окно и отдельную консоль ComfyUI. Когда закончите, закройте консоль ComfyUI: BAT автоматически остановит запущенный им backend и закроется сам.
 3. Дождитесь готовности `http://127.0.0.1:8020/health` и `http://127.0.0.1:8188/system_stats`.
 4. Откройте в браузере `http://127.0.0.1:8188`.
 5. Перетащите на холст `integrations\comfyui\example_workflows\backend_health_and_voices.json`.

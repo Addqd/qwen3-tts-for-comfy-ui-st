@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param([string]$Config = "config/config.local.yaml", [switch]$VisibleComfyUIConsole)
+param(
+    [string]$Config = "config/config.local.yaml",
+    [switch]$VisibleComfyUIConsole,
+    [switch]$WaitForComfyUIExit
+)
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "comfyui-common.ps1")
@@ -27,3 +31,20 @@ if (-not (Test-LocalHttp -Uri "$ComfyUrl/system_stats")) {
 
 Write-Host "TTS backend: $BackendUrl (started by this command: $BackendStarted)"
 Write-Host "ComfyUI: $ComfyUrl (started by this command: $ComfyUIStarted)"
+
+if ($WaitForComfyUIExit) {
+    if (-not $VisibleComfyUIConsole) { throw "WaitForComfyUIExit requires VisibleComfyUIConsole." }
+    if (-not (Test-Path -LiteralPath $script:ComfyUIStatePath)) { throw "ComfyUI project PID file is unavailable." }
+    $ComfyState = Get-Content -Raw -LiteralPath $script:ComfyUIStatePath | ConvertFrom-Json
+    $ComfyProcess = Test-ComfyUIOwnedProcess -State $ComfyState
+    if (-not $ComfyProcess) { throw "The recorded ComfyUI process is not running or its PID was reused." }
+    Write-Host "Close the separate ComfyUI Python console to stop this session."
+    Write-Host "This launcher will then stop only the backend it started itself."
+    try {
+        Wait-Process -Id $ComfyProcess.Id
+    } finally {
+        & (Join-Path $PSScriptRoot "stop-comfyui.ps1")
+        if ($BackendStarted) { & (Join-Path $script:ProjectRoot "stop.ps1") }
+    }
+    Write-Host "ComfyUI closed. Services started by this launcher are stopped."
+}

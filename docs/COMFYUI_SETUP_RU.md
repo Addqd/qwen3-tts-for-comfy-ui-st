@@ -38,7 +38,7 @@ Qwen-модель не загружается в ComfyUI. Ноды катего�
 .\stop.ps1
 ```
 
-Самый простой вариант — дважды щёлкнуть `start-tts-and-comfyui.bat` в Проводнике. BAT переходит в каталог проекта, запускает тот же `scripts\start-tts-and-comfyui.ps1` и просит показать отдельную консоль ComfyUI. Он не изменяет системную Execution Policy.
+Самый простой вариант — дважды щёлкнуть `start-tts-and-comfyui.bat` в Проводнике. BAT переходит в каталог проекта, запускает тот же `scripts\start-tts-and-comfyui.ps1` и показывает отдельную консоль ComfyUI. Оставьте BAT-окно открытым: после закрытия консоли ComfyUI наблюдатель очистит её PID, остановит backend, только если запустил его сам, и завершится. Уже работавший до запуска BAT backend намеренно не останавливается. Системная Execution Policy не изменяется.
 
 PID backend хранится в `runtime/server.json`, PID ComfyUI — в `runtime/comfyui.json`. Stop-скрипты сверяют PID и время запуска и не завершают чужие Python-процессы. Лог скрытого запуска: `logs/comfyui.log` и `logs/comfyui.err.log`; Manager также пишет `ComfyUI\user\comfyui.log`.
 
