@@ -34,7 +34,7 @@ Backend вместе с установленной ComfyUI:
 # без -SkipSynthesis выполняется реальный короткий Qwen workflow
 ```
 
-Для запуска двойным щелчком используйте `start-tts-and-comfyui.bat` в корне проекта. Не закрывайте его окно во время работы: после закрытия отдельной консоли ComfyUI BAT автоматически остановит backend, запущенный им самим, и завершится. ComfyUI: `http://127.0.0.1:8188`. Краткая инструкция: [docs/COMFYUI_QUICKSTART_RU.md](docs/COMFYUI_QUICKSTART_RU.md).
+Для запуска двойным щелчком используйте `start-tts-and-comfyui.bat` в корне проекта. Пока окно BAT открыто, скрытый session watcher следит за обоими сервисами. Закрытие окна BAT, отдельной консоли ComfyUI или аварийное завершение backend автоматически останавливает **оба** подтверждённых проектных процесса. Если ComfyUI из `ComfyUI_windows_portable` уже работает, launcher безопасно восстанавливает её PID по listener-порту и точному пути к embedded Python; процесс из другой папки он не завершает. ComfyUI: `http://127.0.0.1:8188`. Краткая инструкция: [docs/COMFYUI_QUICKSTART_RU.md](docs/COMFYUI_QUICKSTART_RU.md).
 
 ## Повторная установка
 

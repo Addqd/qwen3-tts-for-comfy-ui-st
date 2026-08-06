@@ -38,9 +38,9 @@ Qwen-модель не загружается в ComfyUI. Ноды катего�
 .\stop.ps1
 ```
 
-Самый простой вариант — дважды щёлкнуть `start-tts-and-comfyui.bat` в Проводнике. BAT переходит в каталог проекта, запускает тот же `scripts\start-tts-and-comfyui.ps1` и показывает отдельную консоль ComfyUI. Оставьте BAT-окно открытым: после закрытия консоли ComfyUI наблюдатель очистит её PID, остановит backend, только если запустил его сам, и завершится. Уже работавший до запуска BAT backend намеренно не останавливается. Системная Execution Policy не изменяется.
+Самый простой вариант — дважды щёлкнуть `start-tts-and-comfyui.bat` в Проводнике. BAT переходит в каталог проекта, запускает тот же `scripts\start-tts-and-comfyui.ps1` и показывает отдельную консоль ComfyUI. Скрытый session watcher сверяет PID, время старта и полный путь исполняемого файла каждого процесса. Закрытие BAT-окна, закрытие консоли ComfyUI или аварийное завершение backend останавливает **оба** подтверждённых проектных процесса и очищает runtime-файлы. Если ComfyUI из проектной `ComfyUI_windows_portable` уже слушает `127.0.0.1:8188`, launcher восстанавливает её PID после точной проверки пути; чужой listener он не принимает под управление и не завершает. Системная Execution Policy не изменяется.
 
-PID backend хранится в `runtime/server.json`, PID ComfyUI — в `runtime/comfyui.json`. Stop-скрипты сверяют PID и время запуска и не завершают чужие Python-процессы. Лог скрытого запуска: `logs/comfyui.log` и `logs/comfyui.err.log`; Manager также пишет `ComfyUI\user\comfyui.log`.
+PID backend хранится в `runtime/server.json`, PID ComfyUI — в `runtime/comfyui.json`, PID временного наблюдателя — в `runtime/combined-watch.json`. Stop-скрипты и watcher сверяют PID, время запуска и исполняемый файл и не завершают чужие Python-процессы. Журнал watcher: `logs/combined-session-watch.log`; лог скрытого запуска ComfyUI: `logs/comfyui.log` и `logs/comfyui.err.log`; Manager также пишет `ComfyUI\user\comfyui.log`.
 
 Manager 4.2.2 установлен официальной командой из `ComfyUI\manager_requirements.txt` и включается флагом `--enable-manager`. Отключить его разово можно `start-comfyui.ps1 -NoManager`, постоянно — `manager_enabled: false` в игнорируемом `config/config.local.yaml`.
 

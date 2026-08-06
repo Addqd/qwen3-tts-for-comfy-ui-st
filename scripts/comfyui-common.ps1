@@ -51,3 +51,43 @@ function Test-LocalPortInUse {
     param([int]$Port)
     return [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners().Port -contains $Port
 }
+
+function Get-LocalhostTcpListenerProcess {
+    param([int]$Port)
+
+    $ListenerPids = @()
+    try {
+        $ListenerPids = @(
+            Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop |
+                Where-Object { $_.LocalAddress -eq "127.0.0.1" } |
+                ForEach-Object { [int]$_.OwningProcess }
+        )
+    } catch {
+        $Pattern = "^\s*TCP\s+127\.0\.0\.1:$Port\s+\S+\s+LISTENING\s+(\d+)\s*$"
+        $Netstat = Join-Path $env:SystemRoot "System32\netstat.exe"
+        if (Test-Path -LiteralPath $Netstat) {
+            $ListenerPids = @(
+                & $Netstat -ano -p tcp |
+                    ForEach-Object { if ($_ -match $Pattern) { [int]$Matches[1] } }
+            )
+        }
+    }
+
+    $ListenerPids = @($ListenerPids | Sort-Object -Unique)
+    if ($ListenerPids.Count -ne 1) { return $null }
+    return Get-Process -Id $ListenerPids[0] -ErrorAction SilentlyContinue
+}
+
+function Get-ComfyUIListenerOwnedProcess {
+    param($Settings)
+
+    $Process = Get-LocalhostTcpListenerProcess -Port ([int]$Settings.port)
+    if (-not $Process) { return $null }
+    try {
+        $Root = (Resolve-Path -LiteralPath ([string]$Settings.install_path)).Path
+        $ExpectedPath = [System.IO.Path]::GetFullPath((Join-Path $Root "python_embeded\python.exe"))
+        $ActualPath = [System.IO.Path]::GetFullPath([string]$Process.Path)
+        if ($ActualPath.Equals($ExpectedPath, [System.StringComparison]::OrdinalIgnoreCase)) { return $Process }
+    } catch { }
+    return $null
+}

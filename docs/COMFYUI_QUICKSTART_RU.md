@@ -1,7 +1,7 @@
 # ComfyUI Quick Start
 
-1. Откройте папку `qwen3-tts-st` в Проводнике и дважды щёлкните `start-tts-and-comfyui.bat`. Альтернатива из PowerShell: `.\scripts\start-tts-and-comfyui.ps1 -VisibleComfyUIConsole`.
-2. Оставьте открытыми BAT-окно и отдельную консоль ComfyUI. Когда закончите, закройте консоль ComfyUI: BAT автоматически остановит запущенный им backend и закроется сам.
+1. Откройте папку `qwen3-tts-st` в Проводнике и дважды щёлкните `start-tts-and-comfyui.bat`. Альтернатива из PowerShell: `.\scripts\start-tts-and-comfyui.ps1 -VisibleComfyUIConsole -WaitForComfyUIExit`.
+2. Оставьте BAT-окно открытым во время работы. Когда закончите, закройте BAT-окно либо отдельную консоль ComfyUI: скрытый session watcher автоматически остановит **оба** проектных сервиса. Он также останавливает второй сервис, если backend или ComfyUI аварийно завершился.
 3. Дождитесь готовности `http://127.0.0.1:8020/health` и `http://127.0.0.1:8188/system_stats`.
 4. Откройте в браузере `http://127.0.0.1:8188`.
 5. Перетащите на холст `integrations\comfyui\example_workflows\backend_health_and_voices.json`.
@@ -10,6 +10,6 @@
 8. Откройте `text_to_speech_ru.json`, оставьте endpoint `http://127.0.0.1:8020`, выберите существующий voice и введите русский текст.
 9. Нажмите **Queue**; первая on-demand генерация может занять около минуты. Прослушайте результат в `Preview Audio`.
 10. Для автоматической проверки выполните `.\scripts\test-comfyui-integration.ps1 -SkipSynthesis`; без флага выполняется реальный короткий синтез.
-11. Остановите ComfyUI: `.\scripts\stop-comfyui.ps1`; backend: `.\stop.ps1`.
+11. При раздельном запуске остановите ComfyUI командой `.\scripts\stop-comfyui.ps1`, backend — `.\stop.ps1`. При запуске через BAT достаточно закрыть его окно.
 
 `voice_clone_and_synthesize_ru.json` оставьте до появления разрешённого WAV и точной дословной транскрипции. Подробности: [COMFYUI_SETUP_RU.md](COMFYUI_SETUP_RU.md).
