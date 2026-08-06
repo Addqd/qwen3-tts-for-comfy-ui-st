@@ -4,7 +4,7 @@ chcp 65001 >nul
 pushd "%~dp0"
 
 echo Starting Qwen3-TTS backend and ComfyUI...
-echo A separate ComfyUI Python console will open.
+echo A separate ComfyUI Python console will open if ComfyUI is not already running.
 echo Keep this launcher window open. Close the Python console when you want to stop.
 echo.
 powershell.exe -NoLogo -NoProfile -File "%~dp0scripts\start-tts-and-comfyui.ps1" -VisibleComfyUIConsole -WaitForComfyUIExit
