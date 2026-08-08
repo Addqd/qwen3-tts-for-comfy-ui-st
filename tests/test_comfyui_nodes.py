@@ -91,12 +91,16 @@ def test_endpoint_rejects_non_local_address():
 def test_emotion_script_parsing():
     nodes = load_nodes()
     normalized, segments_json, clean, styles = result_of(nodes.QwenTTSEmotionScriptNode().parse(
-        "Тихо. [voice:happy] Отлично!", '{"neutral":"clone:N","happy":"clone:H"}'
+        'Тихо. [voice:happy] "Отлично!" Потом спокойно.', '{"neutral":"clone:N","happy":"clone:H"}'
     ))
     segments = json.loads(segments_json)
     assert segments[0]["voice"] == "clone:N"
+    assert segments[0]["kind"] == "narration"
     assert segments[1]["voice"] == "clone:H"
-    assert "[voice:happy]" in normalized
+    assert segments[1]["kind"] == "dialogue"
+    assert segments[2]["voice"] == "clone:N"
+    assert segments[2]["style"] == "neutral"
+    assert '[voice:happy] "Отлично!"' in normalized
     assert "[voice:happy]" not in clean
     assert styles == "neutral, happy"
 
@@ -104,14 +108,35 @@ def test_emotion_script_parsing():
 def test_emotion_script_unknown_tag_is_removed_and_falls_back_to_neutral():
     nodes = load_nodes()
     normalized, segments_json, clean, styles = result_of(nodes.QwenTTSEmotionScriptNode().parse(
-        "Начало. [voice:excited] Продолжение.", '{"neutral":"clone:N"}'
+        'Начало. [voice:excited] "Что?"', '{"neutral":"clone:N"}'
     ))
     segments = json.loads(segments_json)
     assert segments[-1]["style"] == "neutral"
+    assert segments[-1]["kind"] == "dialogue"
     assert segments[-1]["voice"] == "clone:N"
     assert "voice:excited" not in normalized
     assert "voice:excited" not in clean
     assert styles == "neutral"
+
+
+def test_emotion_script_ignores_tag_before_narration_and_uses_neutral_mapping():
+    nodes = load_nodes()
+    value = nodes.QwenTTSEmotionScriptNode().parse(
+        '[voice:angry] Она отвернулась. "Я не хочу говорить."',
+        '{"neutral":"clone:N","angry":"clone:A"}',
+    )
+    normalized, segments_json, clean, styles = result_of(value)
+    segments = json.loads(segments_json)
+    assert [(item["kind"], item["style"], item["voice"]) for item in segments] == [
+        ("narration", "neutral", "clone:N"),
+        ("dialogue", "neutral", "clone:N"),
+    ]
+    assert "voice:" not in normalized
+    assert "voice:" not in clean
+    assert styles == "neutral"
+    assert value["ui"]["qwen_tts_emotion"][0]["warnings"] == [
+        "voice_tag_ignored_no_following_quoted_dialogue"
+    ]
 
 
 def test_nodes_report_unavailable_backend(monkeypatch):

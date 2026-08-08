@@ -13,7 +13,7 @@ from typing import Any
 import soundfile as sf
 
 from .audio import change_speed, encode, stitch
-from .emotion import parse_emotion_script
+from .emotion import parse_emotion_script_detailed
 from .preprocess import preprocess, split_long_text
 from .resources import choose_mode, snapshot
 from .voices import VoiceLibrary
@@ -109,8 +109,12 @@ class TTSService:
         try:
             settings = dict(self.config.get("preprocessing", {}) or {})
             prepared = preprocess(request.input, settings, request.preprocessing_mode)
-            segments = parse_emotion_script(prepared, "neutral")
-            base = self.library.resolve(request.voice, str(self.config.get("voices.fallback_profile", "")) or None)
+            segments, router_warnings = parse_emotion_script_detailed(prepared)
+            if not segments:
+                raise ValueError("после удаления служебных тегов не осталось произносимого текста")
+            configured_fallback = str(self.config.get("voices.fallback_profile", "")) or None
+            selected = self.library.resolve(request.voice, configured_fallback)
+            base = self.library.resolve_family_neutral(selected, configured_fallback)
             parts = []
             all_metrics = []
             selected_voices = []
@@ -141,7 +145,9 @@ class TTSService:
                 "sample_rate": sample_rate,
                 "segments": len(parts),
                 "styles": [segment.style for segment in segments],
+                "segment_types": [segment.kind for segment in segments],
                 "voices": selected_voices,
+                "router_warnings": router_warnings,
                 "generation": all_metrics,
             }
             self.last_metrics = metadata

@@ -13,8 +13,17 @@ VOICE_TAG_RE = re.compile(r"\[voice:(neutral|soft|whisper|breathy|happy|sad|angr
 
 
 def _direct_speech(text: str) -> str:
-    groups = re.findall(r"«([^»]+)»|“([^”]+)”|\"([^\"]+)\"", text, flags=re.S)
-    return "\n".join(next(value for value in group if value) for group in groups)
+    pattern = re.compile(
+        r"(?:(\[voice:[a-z][a-z0-9_-]*\])\s*)?"
+        r'(?:"((?:\\.|[^"\\])*)"|«([^»]+)»|“([^”]+)”)',
+        re.I | re.S,
+    )
+    blocks = []
+    for match in pattern.finditer(text):
+        tag = match.group(1)
+        spoken = next(value for value in match.groups()[1:] if value is not None)
+        blocks.append(f"{tag + ' ' if tag else ''}\"{spoken}\"")
+    return "\n".join(blocks)
 
 
 def preprocess(text: str, settings: dict, mode: str | None = None) -> str:
@@ -31,14 +40,14 @@ def preprocess(text: str, settings: dict, mode: str | None = None) -> str:
     if settings.get("remove_html", True):
         value = HTML_RE.sub(" ", value)
         value = html.unescape(value)
-    if active_mode == "direct_speech":
-        extracted = _direct_speech(value)
-        value = extracted if extracted.strip() else value
     if settings.get("remove_markdown", True):
         value = MARKDOWN_LINK_RE.sub(r"\1", value)
         value = re.sub(r"(^|\s)[#>`]+", r"\1", value)
         value = re.sub(r"(?<!\*)\*{1,3}([^*]+)\*{1,3}", r"\1", value)
         value = re.sub(r"_{1,2}([^_]+)_{1,2}", r"\1", value)
+    if active_mode == "direct_speech":
+        extracted = _direct_speech(value)
+        value = extracted if extracted.strip() else value
     abbreviations = settings.get("russian_abbreviations", {}) or {}
     for source, target in abbreviations.items():
         value = re.sub(rf"(?<!\w){re.escape(str(source))}(?!\w)", str(target), value)
@@ -71,4 +80,3 @@ def split_long_text(text: str, max_chars: int = 320) -> list[str]:
     if current:
         chunks.append(current)
     return chunks
-

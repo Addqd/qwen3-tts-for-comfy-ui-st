@@ -144,6 +144,23 @@ class VoiceLibrary:
                 return profile
         return fallback
 
+    def resolve_family_neutral(self, selected: VoiceProfile, configured_fallback: str | None = None) -> VoiceProfile:
+        """Return the deterministic neutral base for a selected voice family."""
+
+        neutral = self.find_style(selected.character, "neutral", selected)
+        if neutral.style.lower() == "neutral" and neutral.reference_path.exists():
+            return neutral
+
+        if configured_fallback:
+            safe = self.resolve(configured_fallback)
+            safe_neutral = self.find_style(safe.character, "neutral", safe)
+            if safe_neutral.style.lower() == "neutral" and safe_neutral.reference_path.exists():
+                return safe_neutral
+
+        raise KeyError(
+            f"для voice family {selected.character} отсутствует neutral-профиль и безопасный fallback"
+        )
+
     def create(self, source: Path, metadata: dict, overwrite: bool = False) -> tuple[VoiceProfile, dict]:
         validation = validate_audio(source, str(metadata.get("ref_text", "")))
         if not validation["valid"]:
@@ -173,4 +190,3 @@ class VoiceLibrary:
         (target / "metadata.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         self.reload()
         return self.resolve(f"clone:{payload['display_name']}"), validation
-

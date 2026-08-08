@@ -19,7 +19,7 @@
       ],
       "properties": {"Node name for S&R": "QwenTTSEmotionScript"},
       "widgets_values": [
-        "[voice:neutral] Тихое начало. [voice:happy] А теперь радостная реплика! [voice:unknown] Неизвестный тег безопасно станет neutral.",
+        "Тихое начало. [voice:happy] \"А теперь радостная реплика!\" Снова neutral. [voice:unknown] \"Неизвестный тег безопасно станет neutral.\"",
         "{\"neutral\":\"clone:QwenDemoRussianNeutral\",\"happy\":\"clone:QwenDemoHappyCandidate\"}"
       ]
     }
@@ -27,6 +27,6 @@
   "links": [],
   "groups": [],
   "config": {},
-  "extra": {"info": "Предпросмотр разбора тегов не запускает синтез и не требует WAV."},
+  "extra": {"info": "Предпросмотр показывает нейтральное повествование и теги только у следующих реплик в ASCII-кавычках; синтез не запускается."},
   "version": 0.4
 }

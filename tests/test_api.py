@@ -70,12 +70,16 @@ def test_clone_rejects_non_wav_and_requires_consent(tmp_path):
 def test_metrics_reload_and_fallback(tmp_path):
     with TestClient(create_app(config=make_test_config(tmp_path))) as client:
         response = client.post("/v1/audio/speech", json={
-            "model": "tts-1-ru", "voice": "missing", "input": "Первое. [voice:angry] Второе!",
+            "model": "tts-1-ru", "voice": "missing", "input": 'Первое. [voice:angry] "Второе!"',
             "response_format": "wav", "speed": 1.0,
         })
         assert response.status_code == 200
         assert int(response.headers["x-tts-segments"]) == 2
-        assert client.get("/metrics").json()["completed"] == 1
+        metrics = client.get("/metrics").json()
+        assert metrics["completed"] == 1
+        assert metrics["last"]["styles"] == ["neutral", "angry"]
+        assert metrics["last"]["segment_types"] == ["narration", "dialogue"]
+        assert metrics["last"]["voices"] == ["clone:TestNeutral", "clone:TestNeutral"]
         assert client.post("/admin/reload-voices").status_code == 200
 
 
@@ -111,3 +115,53 @@ def test_clone_rejects_corrupt_riff_payload(tmp_path):
         response = client.post("/v1/audio/voice-clone", json=payload)
         assert response.status_code == 422
         assert "аудио" in response.text
+
+
+def test_full_message_quote_scope_unknown_tag_and_no_service_leakage(tmp_path):
+    with TestClient(create_app(config=make_test_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "tts-1-ru",
+                "voice": "clone:TestNeutral",
+                "input": (
+                    'Она остановилась. [voice:happy] "Ты пришёл!" '
+                    'Она улыбнулась. [voice:confused] "Что?"'
+                ),
+                "response_format": "wav",
+                "speed": 1.0,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("audio/wav")
+        assert response.content.startswith(b"RIFF")
+        metrics = client.get("/metrics").json()["last"]
+    assert metrics["styles"] == ["neutral", "happy", "neutral", "neutral"]
+    assert metrics["segment_types"] == ["narration", "dialogue", "narration", "dialogue"]
+    assert metrics["voices"] == ["clone:TestNeutral"] * 4
+    assert metrics["router_warnings"] == ["unknown_voice_tag_neutral_fallback"]
+
+
+def test_invalid_voice_without_safe_fallback_is_clear_422(tmp_path):
+    config = make_test_config(tmp_path)
+    config.data["voices"]["fallback_profile"] = ""
+    with TestClient(create_app(config=config)) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            json={"voice": "missing", "input": "Текст.", "response_format": "wav"},
+        )
+    assert response.status_code == 422
+    assert "голосовой профиль не найден" in response.text
+
+
+def test_malformed_json_and_missing_fields_are_json_422(tmp_path):
+    with TestClient(create_app(config=make_test_config(tmp_path))) as client:
+        malformed = client.post(
+            "/v1/audio/speech",
+            content=b'{"voice":',
+            headers={"Content-Type": "application/json"},
+        )
+        missing_voice = client.post("/v1/audio/speech", json={"input": "Текст."})
+    assert malformed.status_code == 422
+    assert malformed.headers["content-type"].startswith("application/json")
+    assert missing_voice.status_code == 422
