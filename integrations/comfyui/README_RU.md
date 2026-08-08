@@ -8,7 +8,7 @@
 - Health — `/health` и `/v1/voices`.
 - Models — `/v1/models`.
 - Voice Selector — список voices и понятное сообщение для отсутствующего ID.
-- Emotion Script — normalized script, JSON segments, clean text, recognized styles; неизвестный стиль → `neutral`.
+- Emotion Script — quote-aware preview: narration всегда neutral, `[voice:style]` действует только на следующую полную ASCII-цитату, затем сбрасывается; service tags не попадают в clean text.
 - Synthesize — `/v1/audio/speech`, ComfyUI `AUDIO`, temp WAV, metadata и duration.
 - Clone Voice — `AUDIO` → mono WAV → consent-gated `/v1/audio/voice-clone`.
 
@@ -34,4 +34,4 @@ Workflow-примеры:
 - `compare_voice_samples_ru.json` — три reference WAV и раздельное сохранение результатов;
 - `text_to_speech_with_emotions_ru.json` — готовая много-сегментная схема.
 
-Подробные инструкции: [../../docs/COMFYUI_SETUP_RU.md](../../docs/COMFYUI_SETUP_RU.md) и [../../docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md](../../docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md). Endpoint намеренно принимает только `http://127.0.0.1:<port>`.
+Подробные инструкции: [../../docs/COMFYUI_SETUP_RU.md](../../docs/COMFYUI_SETUP_RU.md), [../../docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md](../../docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md) и [../../docs/VOICE_CREATION_COMFYUI_AND_SILLYTAVERN_RU.md](../../docs/VOICE_CREATION_COMFYUI_AND_SILLYTAVERN_RU.md). Endpoint намеренно принимает только `http://127.0.0.1:<port>`.

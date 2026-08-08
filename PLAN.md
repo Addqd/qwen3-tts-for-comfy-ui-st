@@ -24,12 +24,17 @@
    - Создать voice library и валидатор WAV.
    - Реализовать конфигурируемую очистку/сегментацию русского текста.
    - Реализовать voice-теги, fallback, паузы, ресемплинг и edge fades при объединении.
-   - Неизвестный корректный tag нормализован в neutral и удаляется до worker; порядок profiles фиксируется в metrics.
+   - Quote-aware контракт реализован: narration neutral, tag только для следующей полной ASCII-цитаты, затем reset; неизвестные/malformed tags не попадают в worker.
+   - Fallback реализован в порядке family style → family neutral → безопасный configured profile; порядок profiles фиксируется в metrics.
 
-5. **DONE — SillyTavern API-совместимость; реальная настройка не выполнялась**
+5. **IN PROGRESS — SillyTavern API-совместимость и существующая установка**
    - Проверить OpenAI-compatible схему текущего штатного provider.
    - Выполнить реальный совместимый HTTP-тест.
    - Описать точную настройку на русском.
+   - Выбран встроенный OpenAI Compatible provider SillyTavern 1.18.0; core и LLM-настройки не менялись.
+   - Экспериментальное изменение `extension_settings.tts` восстановлено из byte-for-byte backup; проект больше не пишет пользовательские настройки.
+   - Созданы независимый `start-tts.bat`, ручная инструкция и read-only proxy smoke; объединённые lifecycle/config scripts удалены.
+   - Backend/API compatibility и payload проверены тестами; живой proxy требует уже запущенной пользователем SillyTavern, browser UX остаётся ручной проверкой.
 
 6. **DONE — ComfyUI**
    - Создать лёгкий custom-node package без torch/transformers/qwen_tts.
@@ -53,8 +58,15 @@
    - Реальные backend neutral/emotion/4-segment WAV и ComfyUI Server → Emotion Script → Synthesize → PreviewAudio прошли.
    - Добавлены четыре рабочих workflow, Router audit, ComfyUI guide и только технический план SillyTavern.
 
+9. **DONE — Портфолио актрис и ready-to-use profiles**
+   - Подготовлены 39 emotion/neutral профилей восьми актрис в локальной игнорируемой библиотеке.
+   - Те же профили установлены в `voice_library/profiles`; backend видит 58 voices суммарно.
+   - Для каждой актрисы настоящим Qwen созданы neutral, happy-router и four-segment Router примеры — 24 файла.
+   - Все references и examples проверены как mono PCM16 24 kHz, invalid/clipping = 0.
+
 ## Блокировки, требующие пользователя
 
 - Собственный разрешённый русский WAV и точная транскрипция, если нужен конкретный пользовательский/персонажный голос.
 - Субъективная оценка финального аудио.
 - Прослушивание public primary/backup samples и подтверждение dataset-транскрипций на слух.
+- Ручной запуск SillyTavern и подтверждение browser autoplay/Stop/replay/group chat после прохождения HTTP proxy test.

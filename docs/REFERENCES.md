@@ -1,6 +1,6 @@
 # Проверенные источники
 
-Дата первоначальной проверки: 2026-08-05; источники ComfyUI повторно проверены 2026-08-06. При отсутствии релизного тега указан наблюдавшийся branch snapshot; это честнее выдуманного commit hash.
+Дата первоначальной проверки: 2026-08-05; источники ComfyUI и SillyTavern повторно проверены 2026-08-08. При отсутствии релизного тега указан наблюдавшийся branch snapshot; это честнее выдуманного commit hash.
 
 | Источник | Версия/snapshot | Что подтверждено | Решение/ограничение |
 |---|---|---|---|
@@ -17,6 +17,8 @@
 | [SillyTavern TTS docs](https://docs.sillytavern.app/extensions/tts/) | `release` docs snapshot | Extensions → TTS, Enable, Auto-generation, manual megaphone, Voice Map, Apply, quotes/actions filters | Использован штатный provider, исходники ST не менялись |
 | [SillyTavern OpenAI-compatible TTS frontend](https://github.com/SillyTavern/SillyTavern/blob/release/public/scripts/extensions/tts/openai-compatible.js) | `release` 2026-08-05 | полный Provider Endpoint; ручной voice list; body model/input/voice/mp3/speed | Наш API повторяет эту форму; реальный shaped request прошёл |
 | [SillyTavern proxy source](https://github.com/SillyTavern/SillyTavern/blob/release/src/endpoints/openai.js) | `release` 2026-08-05 | proxy POST точно на `provider_endpoint`, Bearer key может быть пустым | В документации указан полный `/v1/audio/speech` |
+| [SillyTavern Windows installation](https://docs.sillytavern.app/installation/windows/) | current 2026-08-06 | штатный запуск существующей Windows-установки через `Start.bat`/Node и localhost UI | Используется уже установленная 1.18.0; повторное скачивание и update не выполнялись |
+| [SillyTavern Regex docs](https://docs.sillytavern.app/extensions/regex/) | current 2026-08-08 | Regex может менять display/prompt/chat data в зависимости от ephemerality и scope | Проект не создаёт и не меняет Regex; Router contract сохраняется в backend |
 | [ComfyUI custom-node lifecycle](https://docs.comfy.org/custom-nodes/backend/lifecycle) | current 2026-08-05 | package init, class mappings, node schema | Реализована актуальная регистрация |
 | [ComfyUI custom-node install](https://docs.comfy.org/installation/install_custom_node) | current 2026-08-05 | `custom_nodes`, restart, dependency isolation concerns | Безопасный junction/copy installer |
 | [ComfyUI Windows Portable](https://docs.comfy.org/installation/comfyui_portable_windows) | current 2026-08-06 | стандартный NVIDIA package использует CUDA 13/Python 3.13 и предназначен для RTX; cu126/Python 3.12 указан как альтернатива для старых 10-series | Для RTX 2070 Super выбран стандартный официальный NVIDIA asset |

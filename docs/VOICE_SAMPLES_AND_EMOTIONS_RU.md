@@ -174,23 +174,24 @@ ComfyUI-ноды не импортируют `torch`, `transformers` или `qwe
 
 Реальный backend получает neutral/base `voice` из `Qwen TTS Synthesize`, определяет его `character_name` и для каждого тега ищет same-character profile с нужным `style`. Поэтому mapping в preview и фактическая семья должны совпадать.
 
-Fallback устроен в два уровня:
+Fallback устроен так:
 
-1. если request voice не найден, `voices.fallback_profile` из config выбирает глобальный профиль;
-2. если style-профиль в выбранной семье отсутствует, используется base profile запроса.
+1. определяется neutral-профиль выбранной character family;
+2. для реплики ищется same-family style;
+3. если style отсутствует, используется family neutral;
+4. если отсутствует и family neutral, используется `voices.fallback_profile`.
 
-Практически base profile следует всегда задавать neutral: тогда missing style безопасно становится neutral. Неизвестный корректный тег также нормализуется в `neutral` и удаляется до worker.
+Практически request voice следует задавать neutral. Неизвестные, malformed и не относящиеся к цитате tags удаляются до worker, а речь остаётся neutral.
 
 ## Emotion Script
 
 ```text
-[voice:neutral] Сейчас я говорю спокойно.
-[voice:happy] А теперь я очень рад!
-[voice:sad] Но потом мне стало грустно.
-[voice:angry] И наконец я разозлился!
+Сейчас я говорю спокойно. [voice:happy] "А теперь я очень рад!"
+Повествование снова neutral. [voice:sad] "Мне стало грустно."
+[voice:angry] "И наконец я разозлился!"
 ```
 
-Поддерживаются `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. `Qwen TTS Emotion Script` показывает JSON segments, clean text и recognized styles. Подключите `normalized_script` к optional input `emotion_script` ноды Synthesize и нажмите Queue.
+Поддерживаются `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Повествование и реплики без tag neutral; tag применяется только к непосредственно следующей полной ASCII-цитате и после неё сбрасывается. `Qwen TTS Emotion Script` показывает JSON segments, clean text и recognized styles. Подключите `normalized_script` к optional input `emotion_script` ноды Synthesize и нажмите Queue.
 
 Backend синтезирует сегменты последовательно, добавляет настроенную паузу, выполняет короткие edge fades, ресемплирует при необходимости и возвращает один WAV/AUDIO. Служебные теги worker не получает.
 
@@ -231,7 +232,7 @@ Backend синтезирует сегменты последовательно, 
 | profile already exists | `overwrite=false` | дать новый ID либо осознанно включить overwrite |
 | ref_text mismatch | transcript не совпадает с WAV | переслушать и исправить дословно |
 | emotion звучит как neutral | style отсутствует в семье | создать same-character profile или проверить spelling style |
-| теги слышны | malformed syntax, например пробел внутри `[voice: happy]` | использовать точный `[voice:happy]` |
+| tag не сработал | tag не стоит непосредственно перед полной ASCII-цитатой | использовать `[voice:happy] "Реплика."` |
 | щелчок на границе | reference/output требует прослушивания или fade мал | проверить source, затем осторожно изменить `pauses.crossfade_ms` |
 
 ## Что делать, если reference плохой
