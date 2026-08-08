@@ -71,6 +71,7 @@ Manager 4.2.2 установлен официальной командой из 
 ```text
 [voice:neutral] [voice:soft] [voice:whisper] [voice:breathy]
 [voice:happy] [voice:sad] [voice:angry] [voice:tense]
+[voice:pleasure] [voice:intimate]
 ```
 
 `character_profile_mapping` — JSON, например:
@@ -79,7 +80,7 @@ Manager 4.2.2 установлен официальной командой из 
 {"neutral":"clone:CharacterNeutral","happy":"clone:CharacterHappy"}
 ```
 
-Повествование всегда neutral. Тег применяется только к непосредственно следующей полной реплике в ASCII-кавычках, например `[voice:happy] "Я рада!"`, и после неё сбрасывается. Все service tags удаляются из произносимого текста. Если профиля нужного стиля нет, backend использует neutral/fallback-профиль персонажа. Название стиля не создаёт эмоцию само по себе: для реального `happy`, `whisper` и других вариантов нужны отдельные разрешённые референсы.
+Повествование всегда neutral. Тег применяется только к непосредственно следующей полной реплике в ASCII-кавычках, например `[voice:happy] "Я рада!"`, и после неё сбрасывается. Все service tags удаляются из произносимого текста. Если профиля нужного стиля нет, backend использует neutral/fallback-профиль персонажа. `pleasure` и `intimate` — отдельные profiles, не программные смеси happy/soft/breathy; для качественного результата нужны отдельные разрешённые референсы того же speaker.
 
 ## Когда появится пользовательский WAV
 

@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import re
-from typing import Iterator
+from typing import Iterator, Literal, get_args
 
 
-ALLOWED_STYLES = {"neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense"}
+VoiceStyle = Literal[
+    "neutral",
+    "soft",
+    "whisper",
+    "breathy",
+    "happy",
+    "sad",
+    "angry",
+    "tense",
+    "pleasure",
+    "intimate",
+]
+ALLOWED_STYLES = frozenset(get_args(VoiceStyle))
 
 # The machine contract is intentionally strict: [voice:style]. A broader
 # service-tag matcher removes malformed variants as well, so they can never be

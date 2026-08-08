@@ -10,4 +10,5 @@ characters:
       sad: clone:ExampleCharacterSad
       angry: clone:ExampleCharacterAngry
       tense: clone:ExampleCharacterTense
-
+      pleasure: clone:ExampleCharacterPleasure
+      intimate: clone:ExampleCharacterIntimate

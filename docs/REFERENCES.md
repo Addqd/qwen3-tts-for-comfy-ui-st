@@ -4,7 +4,7 @@
 
 | Источник | Версия/snapshot | Что подтверждено | Решение/ограничение |
 |---|---|---|---|
-| [QwenLM/Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) | `main`, package `qwen-tts 0.1.1` | Python 3.12 fresh env, `Qwen3TTSModel`, Base voice cloning, `language="Russian"`, ICL prompt с reference audio + transcript | Основной официальный inference API; никаких неподтверждённых instruct style для Base |
+| [QwenLM/Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) | `main`, package `qwen-tts 0.1.1`, повторно проверено 2026-08-08 | Python 3.12, Base voice cloning, `language="Russian"`, ICL prompt; `create_voice_clone_prompt` принимает WAV с собственным rate, передаёт его tokenizer и ресемплирует для speaker encoder | Основной официальный inference API; reference не требуется заранее превращать в 24 kHz |
 | [Qwen model card](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base) | snapshot `5d83992436eae1d760afd27aff78a71d676296fc` | 0.6B Base, voice clone, Russian среди поддерживаемых языков | Единственная модель backend; скачана и загружена реально |
 | [Qwen3-TTS technical report](https://arxiv.org/abs/2601.15621) | arXiv:2601.15621 | multilingual/Russian evaluation; ICL text-speech prompt лучше сохраняет просодию, чем speaker embedding only | Выбран `clone_mode: icl` и точная транскрипция |
 | [Dialogs: Russian Emotional Conversations](https://huggingface.co/datasets/langswap/dialogs-ru-emotional-conversations) | revision `e25ba617b2b56bd1dbf255d3905c51bd8da3d31f`, checked 2026-08-06 | 3 раздельных русских актёра, studio WAV 44.1 kHz/16-bit, transcripts, 12 emotion labels, около 20.6 h | Основной локальный test dataset; speakers не смешиваются |

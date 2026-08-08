@@ -92,13 +92,21 @@ class VoiceLibrary:
     def __init__(self, root: Path):
         self.root = root
         self.profiles_root = root / "profiles"
+        self.backups_root = root / "backups"
         self.profiles_root.mkdir(parents=True, exist_ok=True)
+        self.backups_root.mkdir(parents=True, exist_ok=True)
         self.profiles: dict[str, VoiceProfile] = {}
         self.reload()
+
+    def _is_legacy_backup(self, metadata_path: Path) -> bool:
+        relative = metadata_path.relative_to(self.profiles_root)
+        return any(".backup-" in part.lower() for part in relative.parts[:-1])
 
     def reload(self) -> int:
         found: dict[str, VoiceProfile] = {}
         for metadata_path in self.profiles_root.rglob("metadata.json"):
+            if self._is_legacy_backup(metadata_path):
+                continue
             try:
                 data = json.loads(metadata_path.read_text(encoding="utf-8"))
                 display = str(data["display_name"])
@@ -171,7 +179,10 @@ class VoiceLibrary:
         if target.exists() and any(target.iterdir()):
             if not overwrite:
                 raise FileExistsError(f"профиль уже существует: {target}")
-            backup = target.parent / f"{target.name}.backup-{datetime.now():%Y%m%d-%H%M%S}"
+            backup_parent = self.backups_root / character_dir
+            backup_parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            backup = backup_parent / f"{style_dir}-{timestamp}"
             shutil.copytree(target, backup)
         target.mkdir(parents=True, exist_ok=True)
         reference = target / "reference.wav"

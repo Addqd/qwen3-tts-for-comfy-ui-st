@@ -19,7 +19,7 @@
       ],
       "properties": {"Node name for S&R": "QwenTTSEmotionScript"},
       "widgets_values": [
-        "Тихое начало. [voice:happy] \"А теперь радостная реплика!\" Снова neutral. [voice:unknown] \"Неизвестный тег безопасно станет neutral.\"",
+        "Тихое начало. [voice:pleasure] \"М-м... хорошо.\" Снова neutral. [voice:intimate] \"Это только между нами.\" [voice:unknown] \"Неизвестный тег безопасно станет neutral.\"",
         "{\"neutral\":\"clone:QwenDemoRussianNeutral\",\"happy\":\"clone:QwenDemoHappyCandidate\"}"
       ]
     }
@@ -27,6 +27,6 @@
   "links": [],
   "groups": [],
   "config": {},
-  "extra": {"info": "Предпросмотр показывает нейтральное повествование и теги только у следующих реплик в ASCII-кавычках; синтез не запускается."},
+  "extra": {"info": "Предпросмотр показывает quote-aware pleasure/intimate и neutral fallback без синтеза; реальные styles требуют отдельных profiles."},
   "version": 0.4
 }

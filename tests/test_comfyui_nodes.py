@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import ast
+import io
 import json
 from pathlib import Path
+import wave
+
+import numpy as np
+
+from qwen3_tts_st.emotion import ALLOWED_STYLES as BACKEND_STYLES, parse_emotion_script_detailed
 
 
 NODE_FILE = Path(__file__).parents[1] / "integrations/comfyui/qwen_tts_api_nodes/nodes.py"
@@ -103,6 +109,63 @@ def test_emotion_script_parsing():
     assert '[voice:happy] "Отлично!"' in normalized
     assert "[voice:happy]" not in clean
     assert styles == "neutral, happy"
+
+
+def test_comfy_parser_matches_backend_contract_and_styles():
+    nodes = load_nodes()
+    assert set(nodes.ALLOWED_STYLES) == set(BACKEND_STYLES)
+    corpus = [
+        'Она улыбнулась. [voice:pleasure] "М-м... хорошо." Она приблизилась. '
+        '[voice:intimate] "Это только между нами."',
+        '[voice:pleasure]\n"Тест."',
+        '[voice:intimate]    "Тест."',
+        '[voice:unknown] "Что?"',
+        '[voice: happy] "Malformed."',
+        '[voice:angry] Она отвернулась. "Обычная реплика."',
+        '[voice:tense] "Незакрытая реплика',
+    ]
+    for text in corpus:
+        backend_segments, backend_warnings = parse_emotion_script_detailed(text)
+        comfy_segments, comfy_warnings = nodes._quote_aware_segments(text)
+        assert comfy_segments == [item.to_dict() for item in backend_segments]
+        assert comfy_warnings == backend_warnings
+
+
+def test_clone_voice_dropdown_contains_all_delivery_styles():
+    nodes = load_nodes()
+    styles = nodes.QwenTTSCloneVoiceNode.INPUT_TYPES()["required"]["style"][0]
+    assert styles == list(nodes.ALLOWED_STYLES)
+    assert styles[-2:] == ["pleasure", "intimate"]
+
+
+def test_comfy_clone_conversion_preserves_input_sample_rate():
+    nodes = load_nodes()
+
+    class FakeTensor:
+        def __init__(self, value):
+            self.value = value
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def float(self):
+            return self
+
+        def numpy(self):
+            return self.value
+
+    audio = {
+        "waveform": FakeTensor(np.zeros((1, 2, 4410), dtype=np.float32)),
+        "sample_rate": 44100,
+    }
+    payload = nodes._audio_to_wav_bytes(audio)
+    with wave.open(io.BytesIO(payload), "rb") as handle:
+        assert handle.getframerate() == 44100
+        assert handle.getnchannels() == 1
+        assert handle.getsampwidth() == 2
 
 
 def test_emotion_script_unknown_tag_is_removed_and_falls_back_to_neutral():

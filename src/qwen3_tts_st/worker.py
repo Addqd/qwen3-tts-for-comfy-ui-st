@@ -23,7 +23,7 @@ class QwenWorker:
         self.torch = None
         self.loaded_at: float | None = None
         self.load_seconds: float | None = None
-        self.prompt_cache: dict[str, tuple[float, Any]] = {}
+        self.prompt_cache: dict[str, tuple[tuple[int, int, str, str], Any]] = {}
         self.lock = threading.Lock()
 
     @property
@@ -78,16 +78,22 @@ class QwenWorker:
 
     def _prompt(self, profile: VoiceProfile):
         key = str(profile.reference_path.resolve())
-        modified = profile.reference_path.stat().st_mtime
+        stat = profile.reference_path.stat()
+        identity = (
+            stat.st_mtime_ns,
+            stat.st_size,
+            profile.ref_text,
+            profile.clone_mode.lower(),
+        )
         cached = self.prompt_cache.get(key)
-        if cached and cached[0] == modified:
+        if cached and cached[0] == identity:
             return cached[1]
         prompt = self.model.create_voice_clone_prompt(
             ref_audio=str(profile.reference_path),
             ref_text=profile.ref_text,
             x_vector_only_mode=profile.clone_mode.lower() != "icl",
         )
-        self.prompt_cache[key] = (modified, prompt)
+        self.prompt_cache[key] = (identity, prompt)
         return prompt
 
     def synthesize(self, text: str, profile: VoiceProfile, language: str = "Russian") -> tuple[np.ndarray, int, dict]:

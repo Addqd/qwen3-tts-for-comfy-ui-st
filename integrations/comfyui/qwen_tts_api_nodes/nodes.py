@@ -16,8 +16,10 @@ import numpy as np
 
 
 CATEGORY = "Qwen TTS API"
-VERSION = "0.2.0"
-ALLOWED_STYLES = {"neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense"}
+VERSION = "0.3.0"
+ALLOWED_STYLES = (
+    "neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense", "pleasure", "intimate"
+)
 TAG_RE = re.compile(r"\[voice:([a-z][a-z0-9_-]*)\]", re.I)
 SERVICE_TAG_RE = re.compile(r"\[\s*voice(?=\s|:|\])(?:\s*:\s*|\s+)?([^\]\r\n]*)\]", re.I)
 UNTERMINATED_TAG_RE = re.compile(r"\[\s*voice(?=\s|:)(?:\s*:\s*|\s+)[a-z0-9_-]*", re.I)
@@ -108,7 +110,10 @@ def _quote_aware_segments(text: str):
             if pending_style is not None:
                 warnings.append("voice_tag_ignored_no_following_quoted_dialogue")
                 pending_style = None
-            segments.append({"kind": "narration", "style": "neutral", "text": clean})
+            if segments and segments[-1]["kind"] == "narration" and segments[-1]["style"] == "neutral":
+                segments[-1]["text"] = f'{segments[-1]["text"]} {clean}'.strip()
+            else:
+                segments.append({"kind": "narration", "style": "neutral", "text": clean})
     if pending_style is not None:
         warnings.append("voice_tag_ignored_no_following_quoted_dialogue")
     return segments, list(dict.fromkeys(warnings))
@@ -278,7 +283,7 @@ class QwenTTSCloneVoiceNode:
             "ref_text": ("STRING", {"multiline": True}),
             "profile_name": ("STRING", {"default": "CharacterNeutral"}),
             "character_name": ("STRING", {"default": "Character"}),
-            "style": (["neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense"], {"default": "neutral"}),
+            "style": (list(ALLOWED_STYLES), {"default": "neutral"}),
             "language": (["Russian"], {"default": "Russian"}),
             "clone_mode": (["icl", "x_vector"], {"default": "icl"}),
             "consent_confirmed": ("BOOLEAN", {"default": False}),

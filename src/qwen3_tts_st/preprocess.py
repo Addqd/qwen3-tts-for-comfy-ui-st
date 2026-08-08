@@ -3,13 +3,18 @@ from __future__ import annotations
 import html
 import re
 
+from .emotion import ALLOWED_STYLES
+
 
 THINK_RE = re.compile(r"<(?:think|reasoning)>.*?</(?:think|reasoning)>", re.I | re.S)
 CHATML_RE = re.compile(r"<\|(?:im_start|im_end|assistant|user|system)[^|]*\|>", re.I)
 HTML_RE = re.compile(r"<[^>]+>")
 FENCE_RE = re.compile(r"```.*?```", re.S)
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^\)]+\)")
-VOICE_TAG_RE = re.compile(r"\[voice:(neutral|soft|whisper|breathy|happy|sad|angry|tense)\]", re.I)
+VOICE_TAG_RE = re.compile(
+    r"\[voice:(" + "|".join(map(re.escape, sorted(ALLOWED_STYLES))) + r")\]",
+    re.I,
+)
 
 
 def _direct_speech(text: str) -> str:
