@@ -13,7 +13,9 @@
 - неизвестные, malformed, лишние и незакрытые service tags удаляются и никогда не передаются worker;
 - незакрытая цитата безопасно трактуется как neutral narration.
 
-Поддерживаемые styles: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`.
+Поддерживаемые styles: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`, `pleasure`, `intimate`.
+
+`pleasure` и `intimate` выбирают соответственно `<family>_pleasure` и `<family>_intimate`. Это самостоятельные references; Router не смешивает их из happy/soft/breathy. При отсутствии profile действует обычный family neutral fallback.
 
 ```text
 Она остановилась. [voice:tense] "Ты слышал?" Она замерла.
@@ -32,6 +34,8 @@
 - HTTP entry: `POST /v1/audio/speech`;
 - Comfy preview: `QwenTTSEmotionScriptNode`.
 
+Backend остаётся source of truth. ComfyUI не импортирует backend package и сохраняет лёгкую mirror implementation; обязательные parity tests прогоняют общий корпус через оба parser и сравнивают segments, warnings и полный allowlist. Это защищает семантику от тихого drift без установки Qwen/backend зависимостей в embedded Python.
+
 ## Voice fallback
 
 Request voice определяет character family. Neutral narration выбирает `<family>_neutral`, даже если в запросе ошибочно указан эмоциональный профиль. Для dialogue style порядок такой:
@@ -48,8 +52,14 @@ Metadata может содержать коды `unknown_voice_tag_neutral_fallb
 
 ## Проверки
 
-Unit/API/Comfy tests покрывают neutral narration, tagged/untagged dialogue, tag на той же и новой строке, reset, несколько реплик, многострочную цитату, вложенные русские кавычки, Unicode/emoji, escaped quotes, tag перед narration, unknown/malformed/empty/unterminated tags, несколько tags, пустую и незакрытую цитату, отсутствие style profile, отсутствие family neutral, пустой API input и отсутствие service tags в worker text.
+Unit/API/Comfy tests покрывают neutral narration, все десять styles, pleasure/intimate на той же и новой строке, tagged/untagged dialogue, reset, несколько реплик, многострочную цитату, вложенные русские кавычки, Unicode/emoji, escaped quotes, tag перед narration, unknown/malformed/empty/unterminated tags, несколько tags, пустую и незакрытую цитату, dynamic style availability, отсутствие family neutral, пустой API input, отсутствие service tags в worker text и parity backend/Comfy parser.
 
 Старые реальные WAV с четырьмя явно размеченными сегментами остаются пригодны как портфолио, но сами по себе не считаются подтверждением нового quote-aware контракта. Отдельный реальный CPU/Qwen smoke 2026-08-08 дал 3.84 s mono WAV 24 kHz и metrics: `neutral narration → happy dialogue → neutral narration`, соответствующие `test_ru_dima_neutral → test_ru_dima_happy → test_ru_dima_neutral`, warnings = 0, failed = 0. Новые модели не скачивались, массовая генерация не выполнялась.
 
-`pauses.sentence_ms` и `pauses.paragraph_ms` присутствуют в config, однако при объединении Router parts service использует `pauses.segment_ms`. Название `crossfade_ms` историческое: текущий stitch применяет fades вокруг вставленной тишины, а не музыкальный overlap.
+`pauses.sentence_ms` и `pauses.paragraph_ms` сохранены как зарезервированные compatibility keys, но synthesis их сейчас не применяет; отдельный NLP-сегментатор в этот hardening не добавлялся. Используется `pauses.segment_ms`. Название `crossfade_ms` — legacy compatibility key: текущий stitch применяет edge fades вокруг вставленной тишины, а не overlap crossfade.
+
+## Voice library и prompt cache
+
+Active loader сканирует только `voice_library/profiles` и игнорирует legacy directories с `.backup-` в имени. Новые overwrite backups сохраняются в `voice_library/backups/<character>/<style>-<timestamp>` и не могут попасть в `/v1/voices`, `resolve` или `find_style`.
+
+Prompt cache по-прежнему локально инвалидируется по конкретному reference, но identity теперь включает canonical path, `st_mtime_ns`, file size, `ref_text` и normalized `clone_mode`. Исправление transcript или переключение ICL/x-vector после reload пересоздаёт prompt; неизменный следующий request использует cache hit.

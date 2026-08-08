@@ -64,6 +64,14 @@
    - Для каждой актрисы настоящим Qwen созданы neutral, happy-router и four-segment Router примеры — 24 файла.
    - Все references и examples проверены как mono PCM16 24 kHz, invalid/clipping = 0.
 
+10. **DONE — Pleasure/intimate и hardening voice library**
+   - Allowlist расширен до десяти отдельных styles: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`, `pleasure`, `intimate`; quote-aware контракт и neutral fallback сохранены.
+   - Voice-library backups вынесены из active `profiles/` в `backups/`; legacy `*.backup-*` внутри `profiles/` игнорируются loader-ом.
+   - Qwen prompt cache учитывает reference identity, `ref_text` и `clone_mode`; regression tests не загружают настоящую модель.
+   - Backend и лёгкий ComfyUI mirror защищены общим parity corpus; установленная Copy-нода обновлена до `0.3.0` без изменения ComfyUI/Manager/embedded dependencies.
+   - Документация разделяет исходный sample rate reference и текущий output 24 kHz; `sentence_ms`/`paragraph_ms` помечены как reserved, `crossfade_ms` — legacy edge-fade key.
+   - Полная suite: 65 tests; реальный CPU/Qwen fallback smoke подтвердил `neutral → pleasure → neutral → intimate` и четыре выбора family-neutral.
+
 ## Блокировки, требующие пользователя
 
 - Собственный разрешённый русский WAV и точная транскрипция, если нужен конкретный пользовательский/персонажный голос.

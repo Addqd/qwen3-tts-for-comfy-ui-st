@@ -1,6 +1,6 @@
 # Qwen TTS API nodes для ComfyUI
 
-Версия нод `0.2.0`. Это лёгкие localhost HTTP-клиенты для отдельного backend `http://127.0.0.1:8020`. В пакет не входят `torch`, `transformers`, `qwen_tts` или CUDA-библиотеки; модель и voice library остаются в backend-процессе.
+Версия нод `0.3.0`. Это лёгкие localhost HTTP-клиенты для отдельного backend `http://127.0.0.1:8020`. В пакет не входят `torch`, `transformers`, `qwen_tts` или CUDA-библиотеки; модель и voice library остаются в backend-процессе.
 
 ## Ноды
 
@@ -8,9 +8,9 @@
 - Health — `/health` и `/v1/voices`.
 - Models — `/v1/models`.
 - Voice Selector — список voices и понятное сообщение для отсутствующего ID.
-- Emotion Script — quote-aware preview: narration всегда neutral, `[voice:style]` действует только на следующую полную ASCII-цитату, затем сбрасывается; service tags не попадают в clean text.
+- Emotion Script — quote-aware preview десяти styles, включая `pleasure` и `intimate`: narration всегда neutral, `[voice:style]` действует только на следующую полную ASCII-цитату, затем сбрасывается; service tags не попадают в clean text. Parity tests сравнивают mirror parser с backend source of truth.
 - Synthesize — `/v1/audio/speech`, ComfyUI `AUDIO`, temp WAV, metadata и duration.
-- Clone Voice — `AUDIO` → mono WAV → consent-gated `/v1/audio/voice-clone`.
+- Clone Voice — `AUDIO` → mono PCM16 WAV с сохранением исходного sample rate → consent-gated `/v1/audio/voice-clone`.
 
 Установка на проверенную Portable:
 

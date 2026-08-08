@@ -191,7 +191,7 @@ Fallback устроен так:
 [voice:angry] "И наконец я разозлился!"
 ```
 
-Поддерживаются `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Повествование и реплики без tag neutral; tag применяется только к непосредственно следующей полной ASCII-цитате и после неё сбрасывается. `Qwen TTS Emotion Script` показывает JSON segments, clean text и recognized styles. Подключите `normalized_script` к optional input `emotion_script` ноды Synthesize и нажмите Queue.
+Поддерживаются `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`, `pleasure`, `intimate`. Pleasure и intimate требуют отдельных same-speaker references; существующие families без них корректно используют neutral fallback. Повествование и реплики без tag neutral; tag применяется только к непосредственно следующей полной ASCII-цитате и после неё сбрасывается. `Qwen TTS Emotion Script` показывает JSON segments, clean text и recognized styles. Подключите `normalized_script` к optional input `emotion_script` ноды Synthesize и нажмите Queue.
 
 Backend синтезирует сегменты последовательно, добавляет настроенную паузу, выполняет короткие edge fades, ресемплирует при необходимости и возвращает один WAV/AUDIO. Служебные теги worker не получает.
 
@@ -233,7 +233,7 @@ Backend синтезирует сегменты последовательно, 
 | ref_text mismatch | transcript не совпадает с WAV | переслушать и исправить дословно |
 | emotion звучит как neutral | style отсутствует в семье | создать same-character profile или проверить spelling style |
 | tag не сработал | tag не стоит непосредственно перед полной ASCII-цитатой | использовать `[voice:happy] "Реплика."` |
-| щелчок на границе | reference/output требует прослушивания или fade мал | проверить source, затем осторожно изменить `pauses.crossfade_ms` |
+| щелчок на границе | reference/output требует прослушивания или edge fade мал | проверить source, затем осторожно изменить legacy-key `pauses.crossfade_ms`; это fade вокруг паузы, не overlap |
 
 ## Что делать, если reference плохой
 

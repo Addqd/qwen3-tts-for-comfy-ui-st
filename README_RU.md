@@ -82,7 +82,7 @@ Endpoints: `GET /health`, `/v1/models`, `/v1/voices`, `/metrics`; `POST /v1/audi
 
 Для наилучшего подтверждённого режима используйте русский WAV и его точную дословную расшифровку (`clone_mode: icl`). Добавление и проверка описаны в [voice_library/README_RU.md](voice_library/README_RU.md). Клонируйте только голос, на использование которого есть разрешение.
 
-Эмоции реализованы отдельными референсами одного персонажа: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Повествование всегда neutral. Тег вида `[voice:happy]` действует только на непосредственно следующую полную реплику в ASCII-кавычках `"..."`, затем стиль сбрасывается. Неизвестные и malformed service tags удаляются до worker. Fallback: `<family>_<style>` → `<family>_neutral` → настроенный безопасный профиль.
+Эмоции реализованы отдельными референсами одного персонажа: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`, `pleasure`, `intimate`. `pleasure` означает довольную/чувственно-положительную подачу, `intimate` — близкую приватную манеру; это самостоятельные profiles, а не смеси существующих styles. Повествование всегда neutral. Тег вида `[voice:happy]` действует только на непосредственно следующую полную реплику в ASCII-кавычках `"..."`, затем стиль сбрасывается. Неизвестные и malformed service tags удаляются до worker. Fallback: `<family>_<style>` → `<family>_neutral` → настроенный безопасный профиль.
 
 Подготовка открытых русских samples, 15 временных test profiles и пошаговая работа в ComfyUI: [docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md](docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md). Доказательный аудит Router: [docs/EMOTION_ROUTER_AUDIT_RU.md](docs/EMOTION_ROUTER_AUDIT_RU.md).
 

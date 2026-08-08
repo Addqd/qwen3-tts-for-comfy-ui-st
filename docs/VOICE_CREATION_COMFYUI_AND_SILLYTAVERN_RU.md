@@ -4,7 +4,7 @@
 
 ## 1. Подготовьте разрешённый reference
 
-Используйте чистый mono WAV с одним голосом, без музыки, реверберации и чужой речи. Для Base-модели критична точная дословная `ref_text`: паузы можно передать пунктуацией, но нельзя заменять или додумывать слова. Проект приводит reference к mono PCM16 24 kHz, однако плохой источник обработкой не исправить.
+Используйте чистый WAV с одним голосом, без музыки, реверберации и чужой речи. Для Base-модели критична точная дословная `ref_text`: паузы можно передать пунктуацией, но нельзя заменять или додумывать слова. ComfyUI-нода сводит AUDIO в mono PCM16, сохраняя исходный sample rate; прямой API clone сохраняет переданный WAV без обязательного resample. `qwen-tts` принимает исходный rate, передаёт его speech tokenizer и внутренне ресемплирует для speaker encoder. Текущий generated output модели имеет 24 kHz, но это не требование к reference.
 
 Официальный API Qwen Base клонирует голос по `ref_audio` и `ref_text`; язык синтеза в проекте всегда передаётся явно как Russian. Используйте только голос и запись, на которые у вас есть разрешение.
 
@@ -40,7 +40,11 @@ clone:my_character_happy
 clone:my_character_sad
 clone:my_character_angry
 clone:my_character_whisper
+clone:my_character_pleasure
+clone:my_character_intimate
 ```
+
+`pleasure` — удовольствие/наслаждение, явно довольная чувственно-положительная подача. `intimate` — близкая, приватная, нежно-чувственная манера речи. Они не вычисляются из happy/soft/breathy: каждый вариант требует отдельного реального reference того же speaker. Отсутствие этих папок в старой семье нормально и ведёт к family neutral fallback.
 
 Рекомендуемый порядок:
 
@@ -49,7 +53,7 @@ clone:my_character_whisper
 3. Укажите точную transcript и style.
 4. Не включайте overwrite при первом сравнении — создайте новый candidate ID.
 5. Выполните одинаковую контрольную фразу для candidates и выберите лучший на слух.
-6. Только после выбора заменяйте основной profile осознанно; voice library создаёт backup прежней style-папки.
+6. Только после выбора заменяйте основной profile осознанно; voice library создаёт backup прежней style-папки в `voice_library/backups/<character>/`, вне active scan path.
 
 После изменения library вызовите `/admin/reload-voices` либо перезапустите backend.
 
@@ -85,7 +89,7 @@ Speed: 1
 
 ## 7. Критерии приёмки
 
-- reference читается, mono PCM16 24 kHz, без clipping;
+- reference читается, имеет корректный sample rate и не клиппует; ComfyUI clone path делает mono PCM16 без принудительного 24 kHz resample;
 - transcript дословная;
 - neutral узнаваем и стабилен на нескольких фразах;
 - emotion отличается подачей, но сохраняет speaker identity;
@@ -98,6 +102,7 @@ Speed: 1
 ## 8. Где лежат результаты
 
 - рабочие profiles: `voice_library/profiles`;
+- backups после overwrite: `voice_library/backups`;
 - локальное непубликуемое портфолио: `local_voice_samples/readytouseprofiles`;
 - тестовые аудио: `artifacts/audio-tests`;
 - workflow JSON: `integrations/comfyui/example_workflows`.
