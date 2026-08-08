@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 from .config import AppConfig, load_config
+from .emotion import VoiceStyle
 from .service import TTSService
 
 
@@ -32,7 +33,7 @@ class CloneRequest(BaseModel):
     ref_text: str = Field(min_length=1)
     profile_name: str
     character_name: str
-    style: Literal["neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense"] = "neutral"
+    style: VoiceStyle = "neutral"
     language: str = "Russian"
     clone_mode: Literal["icl", "x_vector"] = "icl"
     overwrite: bool = False

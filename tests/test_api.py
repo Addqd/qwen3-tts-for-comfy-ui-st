@@ -1,6 +1,8 @@
 from copy import deepcopy
+import base64
 import json
 from pathlib import Path
+import shutil
 
 import numpy as np
 import soundfile as sf
@@ -165,3 +167,40 @@ def test_malformed_json_and_missing_fields_are_json_422(tmp_path):
     assert malformed.status_code == 422
     assert malformed.headers["content-type"].startswith("application/json")
     assert missing_voice.status_code == 422
+
+
+def test_voice_clone_accepts_pleasure_and_intimate_styles(tmp_path):
+    config = make_test_config(tmp_path)
+    reference = config.path("voices.library_dir", "voice_library") / "profiles" / "test" / "neutral" / "reference.wav"
+    encoded = base64.b64encode(reference.read_bytes()).decode("ascii")
+    with TestClient(create_app(config=config)) as client:
+        for style in ("pleasure", "intimate"):
+            response = client.post(
+                "/v1/audio/voice-clone",
+                json={
+                    "reference_audio_base64": encoded,
+                    "ref_text": "Раз, два, три.",
+                    "profile_name": f"Test{style.title()}",
+                    "character_name": "Test",
+                    "style": style,
+                    "clone_mode": "icl",
+                    "consent_confirmed": True,
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["metadata"]["style"] == style
+
+
+def test_v1_voices_ignores_legacy_profile_backup_directories(tmp_path):
+    config = make_test_config(tmp_path)
+    active = config.path("voices.library_dir", "voice_library") / "profiles" / "test" / "neutral"
+    legacy = active.parent / "neutral.backup-20260808-120000"
+    shutil.copytree(active, legacy)
+    metadata_path = legacy / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update({"profile_id": "backup_neutral", "display_name": "BackupNeutral"})
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+
+    with TestClient(create_app(config=config)) as client:
+        voices = client.get("/v1/voices").json()["data"]
+    assert [item["display_name"] for item in voices] == ["TestNeutral"]

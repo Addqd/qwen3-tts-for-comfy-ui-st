@@ -61,12 +61,13 @@ $EmbeddedPython = Join-Path $Settings.install_path "python_embeded\python.exe"
 $HasQwenBackend = & $EmbeddedPython -c "import importlib.util; print(importlib.util.find_spec('qwen_tts') is not None)"
 if ($LASTEXITCODE -ne 0 -or $HasQwenBackend.Trim() -ne "False") { throw "qwen_tts is unexpectedly installed in ComfyUI embedded Python." }
 
+$DiagnosticText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0KLQuNGF0L7QtSDQv9C+0LLQtdGB0YLQstC+0LLQsNC90LjQtS4gW3ZvaWNlOmhhcHB5XSAi0KDQsNC00L7RgdGC0L3QsNGPINGA0LXQv9C70LjQutCwISIg0KHQvdC+0LLQsCDQvdC10LnRgtGA0LDQu9GM0L3Qvi4gW3ZvaWNlOnVua25vd25dICLQkdC10LfQvtC/0LDRgdC90YvQuSBmYWxsYmFjay4i"))
 $DiagnosticPrompt = [ordered]@{
     "1" = @{ class_type = "QwenTTSServer"; inputs = @{ endpoint = $BackendUrl; timeout = 30; model = "tts-1-ru"; response_format = "wav" } }
     "2" = @{ class_type = "QwenTTSHealth"; inputs = @{ server = @("1", 0) } }
     "3" = @{ class_type = "QwenTTSModels"; inputs = @{ server = @("1", 0) } }
     "4" = @{ class_type = "QwenTTSVoiceSelector"; inputs = @{ server = @("1", 0); voice = "clone:QwenDemoRussianNeutral" } }
-    "5" = @{ class_type = "QwenTTSEmotionScript"; inputs = @{ text = 'Тихое повествование. [voice:happy] "Радостная реплика!" Снова нейтрально. [voice:unknown] "Безопасный fallback."'; character_profile_mapping = "{`"neutral`":`"clone:QwenDemoRussianNeutral`",`"happy`":`"clone:QwenDemoHappyCandidate`"}" } }
+    "5" = @{ class_type = "QwenTTSEmotionScript"; inputs = @{ text = $DiagnosticText; character_profile_mapping = "{`"neutral`":`"clone:QwenDemoRussianNeutral`",`"happy`":`"clone:QwenDemoHappyCandidate`"}" } }
     "6" = @{ class_type = "QwenTTSVoiceSelector"; inputs = @{ server = @("1", 0); voice = "clone:DefinitelyMissingProfile" } }
 }
 $DiagnosticJob = Submit-ComfyPrompt -Prompt $DiagnosticPrompt -Timeout 120
@@ -88,9 +89,10 @@ $SynthesisPromptId = $null
 if (-not $SkipSynthesis) {
     $VoiceIds = @($Voices.data | ForEach-Object { $_.voice_id })
     if ($VoiceIds -notcontains "clone:QwenDemoRussianNeutral") { throw "The documented synthetic technical profile clone:QwenDemoRussianNeutral is unavailable; real synthesis was not attempted." }
+    $SynthesisText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0J/RgNC+0LLQtdGA0LrQsCDRgNC10LDQu9GM0L3QvtCz0L4g0LLQt9Cw0LjQvNC+0LTQtdC50YHRgtCy0LjRjyBDb21meVVJINGBINC70L7QutCw0LvRjNC90YvQvCBRd2VuIFRUUyBiYWNrZW5kLg=="))
     $SynthesisPrompt = [ordered]@{
         "1" = @{ class_type = "QwenTTSServer"; inputs = @{ endpoint = $BackendUrl; timeout = $TimeoutSeconds; model = "tts-1-ru"; response_format = "wav" } }
-        "2" = @{ class_type = "QwenTTSSynthesize"; inputs = @{ server = @("1", 0); text = "Проверка реального взаимодействия ComfyUI с локальным Qwen TTS backend."; voice = "clone:QwenDemoRussianNeutral"; speed = 1.0; model = "tts-1-ru"; response_format = "wav"; preprocessing_mode = "all"; emotion_script = "" } }
+        "2" = @{ class_type = "QwenTTSSynthesize"; inputs = @{ server = @("1", 0); text = $SynthesisText; voice = "clone:QwenDemoRussianNeutral"; speed = 1.0; model = "tts-1-ru"; response_format = "wav"; preprocessing_mode = "all"; emotion_script = "" } }
         "3" = @{ class_type = "PreviewAudio"; inputs = @{ audio = @("2", 0) } }
     }
     $Response = Invoke-JsonPost -Uri "$ComfyUrl/prompt" -Payload @{ prompt = $SynthesisPrompt }

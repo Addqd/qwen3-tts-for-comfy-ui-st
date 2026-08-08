@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from qwen3_tts_st.app import create_app
 from qwen3_tts_st.config import AppConfig, load_config
 from qwen3_tts_st.emotion import (
+    ALLOWED_STYLES,
     parse_emotion_script,
     parse_emotion_script_detailed,
     strip_voice_tags,
@@ -75,6 +76,39 @@ def parsed(text: str) -> list[tuple[str, str, str]]:
 )
 def test_quote_aware_parser_contract(text, expected):
     assert parsed(text) == expected
+
+
+def test_all_ten_delivery_styles_remain_allowlisted():
+    assert ALLOWED_STYLES == {
+        "neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense",
+        "pleasure", "intimate",
+    }
+
+
+@pytest.mark.parametrize(
+    "text,style",
+    [
+        ('[voice:pleasure] "Тест."', "pleasure"),
+        ('[voice:pleasure]\n"Тест."', "pleasure"),
+        ('[voice:intimate]    "Тест."', "intimate"),
+    ],
+)
+def test_new_styles_apply_only_to_the_next_complete_quote(text, style):
+    assert parsed(text) == [("dialogue", style, "Тест.")]
+
+
+def test_pleasure_and_intimate_reset_to_neutral_narration():
+    text = (
+        'Она улыбнулась. [voice:pleasure] "М-м... хорошо." '
+        'Она немного приблизилась. '
+        '[voice:intimate] "Я скажу тебе это только один раз."'
+    )
+    assert parsed(text) == [
+        ("narration", "neutral", "Она улыбнулась."),
+        ("dialogue", "pleasure", "М-м... хорошо."),
+        ("narration", "neutral", "Она немного приблизилась."),
+        ("dialogue", "intimate", "Я скажу тебе это только один раз."),
+    ]
 
 
 def test_invalid_narration_tag_is_removed_and_neutral():
@@ -226,6 +260,33 @@ def test_missing_emotion_dynamically_falls_back_then_uses_new_profile(tmp_path, 
     happy = _add_profile(service, tmp_path, "happy")
     asyncio.run(service.synthesize(_request('[voice:happy] "Привет!"', neutral)))
     assert selected[-1] == happy
+
+
+def test_new_styles_fall_back_then_are_selected_after_reload(tmp_path, monkeypatch):
+    service = TTSService(_make_config(tmp_path))
+    neutral = _add_profile(service, tmp_path, "neutral")
+    captured: list[tuple[str, str]] = []
+    original = service.worker.synthesize
+
+    def recording_synthesize(text, profile, language):
+        captured.append((text, profile.voice_id))
+        return original(text, profile, language)
+
+    monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
+    text = '[voice:pleasure] "Тест один." [voice:intimate] "Тест два."'
+    _, _, first_metadata = asyncio.run(service.synthesize(_request(text, neutral)))
+    assert first_metadata["styles"] == ["pleasure", "intimate"]
+    assert [voice for _, voice in captured] == [neutral, neutral]
+    assert all("[voice:" not in spoken.lower() for spoken, _ in captured)
+
+    pleasure = _add_profile(service, tmp_path, "pleasure")
+    intimate = _add_profile(service, tmp_path, "intimate")
+    service.library.reload()
+    captured.clear()
+    _, _, second_metadata = asyncio.run(service.synthesize(_request(text, neutral)))
+    assert second_metadata["styles"] == ["pleasure", "intimate"]
+    assert [voice for _, voice in captured] == [pleasure, intimate]
+    assert all("[voice:" not in spoken.lower() for spoken, _ in captured)
 
 
 def test_emotional_request_voice_still_uses_family_neutral_for_narration(tmp_path, monkeypatch):

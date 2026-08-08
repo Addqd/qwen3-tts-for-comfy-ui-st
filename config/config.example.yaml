@@ -47,9 +47,11 @@ chunking:
   max_chars: 320
 
 pauses:
+  # Reserved compatibility keys: synthesis currently does not apply them.
   sentence_ms: 80
   paragraph_ms: 220
   segment_ms: 120
+  # Legacy name: edge-fade duration around silence, not overlap crossfade.
   crossfade_ms: 8
 
 preprocessing:
