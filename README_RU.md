@@ -36,6 +36,15 @@ Backend вместе с установленной ComfyUI:
 
 Для запуска двойным щелчком используйте `start-tts-and-comfyui.bat` в корне проекта. Пока окно BAT открыто, скрытый session watcher следит за обоими сервисами. Закрытие окна BAT, отдельной консоли ComfyUI или аварийное завершение backend автоматически останавливает **оба** подтверждённых проектных процесса. Если ComfyUI из `ComfyUI_windows_portable` уже работает, launcher безопасно восстанавливает её PID по listener-порту и точному пути к embedded Python; процесс из другой папки он не завершает. ComfyUI: `http://127.0.0.1:8188`. Краткая инструкция: [docs/COMFYUI_QUICKSTART_RU.md](docs/COMFYUI_QUICKSTART_RU.md).
 
+Только backend, без ComfyUI и без управления SillyTavern:
+
+```powershell
+.\start-tts.bat
+# либо .\start.ps1
+```
+
+SillyTavern запускается отдельно своим существующим `Start.bat` и настраивается вручную через встроенный OpenAI Compatible provider. Проект не меняет её settings, карточки, чаты, prompts, Regex или Voice Map. Проверка proxy после ручного запуска: `.\scripts\test-sillytavern-integration.ps1`. Quick Start: [docs/SILLYTAVERN_QUICKSTART_RU.md](docs/SILLYTAVERN_QUICKSTART_RU.md).
+
 ## Повторная установка
 
 Нужен CPython 3.12. На этой системе `py` не содержит установленного Python, поэтому путь передаётся явно:
@@ -73,18 +82,22 @@ Endpoints: `GET /health`, `/v1/models`, `/v1/voices`, `/metrics`; `POST /v1/audi
 
 Для наилучшего подтверждённого режима используйте русский WAV и его точную дословную расшифровку (`clone_mode: icl`). Добавление и проверка описаны в [voice_library/README_RU.md](voice_library/README_RU.md). Клонируйте только голос, на использование которого есть разрешение.
 
-Эмоции реализованы отдельными референсами одного персонажа: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Теги вида `[voice:happy]` удаляются до worker и маршрутизируют сегмент к соответствующему профилю. Неизвестный корректный тег становится `neutral`; отсутствующий style использует request base profile, поэтому base рекомендуется задавать neutral.
+Эмоции реализованы отдельными референсами одного персонажа: `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Повествование всегда neutral. Тег вида `[voice:happy]` действует только на непосредственно следующую полную реплику в ASCII-кавычках `"..."`, затем стиль сбрасывается. Неизвестные и malformed service tags удаляются до worker. Fallback: `<family>_<style>` → `<family>_neutral` → настроенный безопасный профиль.
 
 Подготовка открытых русских samples, 15 временных test profiles и пошаговая работа в ComfyUI: [docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md](docs/VOICE_SAMPLES_AND_EMOTIONS_RU.md). Доказательный аудит Router: [docs/EMOTION_ROUTER_AUDIT_RU.md](docs/EMOTION_ROUTER_AUDIT_RU.md).
 
+Локальное портфолио восьми актрис находится в игнорируемой папке `local_voice_samples/readytouseprofiles`: 39 подготовленных профилей и 24 настоящих Qwen-примера. Те же 39 профилей установлены в локальную `voice_library/profiles`. Состав и ограничения: [docs/ACTRESS_VOICE_PROFILES_RU.md](docs/ACTRESS_VOICE_PROFILES_RU.md).
+
 ## Интеграции
 
-- [SillyTavern API-настройка](docs/SILLYTAVERN_SETUP_RU.md)
-- [План будущей эмоциональной интеграции SillyTavern](docs/SILLYTAVERN_INTEGRATION_PLAN_RU.md)
+- [SillyTavern: полная настройка](docs/SILLYTAVERN_SETUP_RU.md)
+- [SillyTavern: Quick Start](docs/SILLYTAVERN_QUICKSTART_RU.md)
+- [SillyTavern: диагностика](docs/SILLYTAVERN_TROUBLESHOOTING_RU.md)
 - [ComfyUI](docs/COMFYUI_SETUP_RU.md)
+- [Создание голосов и эмоций: ComfyUI → SillyTavern](docs/VOICE_CREATION_COMFYUI_AND_SILLYTAVERN_RU.md)
 - Workflow JSON: `integrations/comfyui/example_workflows`
 
-Официальная ComfyUI Windows Portable NVIDIA `0.30.0` находится в подпапке `ComfyUI_windows_portable` внутри корня проекта. На этом компьютере проект можно перемещать одной папкой: конфигурация использует относительный путь. При переносе на другой компьютер обычный `.venv` может потребовать пересоздания под установленный там Python; embedded Python ComfyUI остаётся самодостаточным. Доступны Server, Health, Models, Voice Selector, Emotion Script, Synthesize и Clone Voice. Ноды установлены копированием и не содержат Qwen/torch/transformers; Qwen-модель остаётся только в backend. SillyTavern не изменялась.
+Официальная ComfyUI Windows Portable NVIDIA `0.30.0` находится в подпапке `ComfyUI_windows_portable` внутри корня проекта. На этом компьютере проект можно перемещать одной папкой: конфигурация использует относительный путь. При переносе на другой компьютер обычный `.venv` может потребовать пересоздания под установленный там Python; embedded Python ComfyUI остаётся самодостаточным. Доступны Server, Health, Models, Voice Selector, Emotion Script, Synthesize и Clone Voice. Ноды установлены копированием и не содержат Qwen/torch/transformers; Qwen-модель остаётся только в backend. Пользовательские настройки SillyTavern проектом не изменяются.
 
 ## Режимы
 

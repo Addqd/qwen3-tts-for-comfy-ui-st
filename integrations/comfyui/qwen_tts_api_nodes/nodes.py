@@ -19,6 +19,99 @@ CATEGORY = "Qwen TTS API"
 VERSION = "0.2.0"
 ALLOWED_STYLES = {"neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense"}
 TAG_RE = re.compile(r"\[voice:([a-z][a-z0-9_-]*)\]", re.I)
+SERVICE_TAG_RE = re.compile(r"\[\s*voice(?=\s|:|\])(?:\s*:\s*|\s+)?([^\]\r\n]*)\]", re.I)
+UNTERMINATED_TAG_RE = re.compile(r"\[\s*voice(?=\s|:)(?:\s*:\s*|\s+)[a-z0-9_-]*", re.I)
+
+
+def _is_escaped(text: str, position: int) -> bool:
+    backslashes = 0
+    position -= 1
+    while position >= 0 and text[position] == "\\":
+        backslashes += 1
+        position -= 1
+    return bool(backslashes % 2)
+
+
+def _strip_service_tags(text: str) -> str:
+    return UNTERMINATED_TAG_RE.sub("", SERVICE_TAG_RE.sub("", text)).strip()
+
+
+def _tag_at(text: str, position: int):
+    strict = TAG_RE.match(text, position)
+    if strict:
+        requested = strict.group(1).lower()
+        if requested in ALLOWED_STYLES:
+            return strict.end(), requested, []
+        return strict.end(), "neutral", ["unknown_voice_tag_neutral_fallback"]
+    malformed = SERVICE_TAG_RE.match(text, position)
+    if malformed:
+        return malformed.end(), "neutral", ["malformed_voice_tag_neutral_fallback"]
+    unterminated = UNTERMINATED_TAG_RE.match(text, position)
+    if unterminated:
+        return unterminated.end(), "neutral", ["unterminated_voice_tag_removed"]
+    return None
+
+
+def _quote_aware_segments(text: str):
+    """Lightweight mirror of the backend parser for ComfyUI preview only."""
+
+    tokens = []
+    cursor = position = 0
+    while position < len(text):
+        if text[position] == "[":
+            tag = _tag_at(text, position)
+            if tag:
+                if cursor < position:
+                    tokens.append(("text", text[cursor:position], None, []))
+                position, style, warnings = tag
+                tokens.append(("tag", "", style, warnings))
+                cursor = position
+                continue
+        if text[position] == '"' and not _is_escaped(text, position):
+            closing = None
+            for candidate in range(position + 1, len(text)):
+                if text[candidate] == '"' and not _is_escaped(text, candidate):
+                    closing = candidate
+                    break
+            if cursor < position:
+                tokens.append(("text", text[cursor:position], None, []))
+            if closing is None:
+                tokens.append(("text", text[position + 1 :], None, ["unclosed_dialogue_treated_as_neutral"]))
+                cursor = len(text)
+                break
+            tokens.append(("dialogue", text[position + 1 : closing], None, []))
+            position = closing + 1
+            cursor = position
+            continue
+        position += 1
+    if cursor < len(text):
+        tokens.append(("text", text[cursor:], None, []))
+
+    segments = []
+    warnings = []
+    pending_style = None
+    for kind, value, token_style, token_warnings in tokens:
+        warnings.extend(token_warnings)
+        if kind == "tag":
+            if pending_style is not None:
+                warnings.append("multiple_voice_tags_last_wins")
+            pending_style = token_style
+            continue
+        clean = _strip_service_tags(value).replace('\\"', '"').strip()
+        if kind == "dialogue":
+            if clean:
+                segments.append({"kind": "dialogue", "style": pending_style or "neutral", "text": clean})
+            else:
+                warnings.append("empty_dialogue_ignored")
+            pending_style = None
+        elif clean:
+            if pending_style is not None:
+                warnings.append("voice_tag_ignored_no_following_quoted_dialogue")
+                pending_style = None
+            segments.append({"kind": "narration", "style": "neutral", "text": clean})
+    if pending_style is not None:
+        warnings.append("voice_tag_ignored_no_following_quoted_dialogue")
+    return segments, list(dict.fromkeys(warnings))
 
 
 def _endpoint(value: str) -> str:
@@ -249,26 +342,22 @@ class QwenTTSEmotionScriptNode:
         mapping = json.loads(character_profile_mapping or "{}")
         if not isinstance(mapping, dict):
             raise ValueError("character_profile_mapping must be a JSON object")
-        matches = list(TAG_RE.finditer(text))
-        segments = []
-        style, cursor = "neutral", 0
-        for match in matches:
-            part = text[cursor:match.start()].strip()
-            if part:
-                segments.append({"style": style, "voice": mapping.get(style), "text": part})
-            requested_style = match.group(1).lower()
-            style = requested_style if requested_style in ALLOWED_STYLES else "neutral"
-            cursor = match.end()
-        tail = text[cursor:].strip()
-        if tail:
-            segments.append({"style": style, "voice": mapping.get(style), "text": tail})
-        if not segments and text.strip():
-            segments = [{"style": "neutral", "voice": mapping.get("neutral"), "text": text.strip()}]
-        normalized = " ".join(f"[voice:{item['style']}] {item['text']}" for item in segments)
-        clean = " ".join(TAG_RE.sub("", text).split())
+        segments, warnings = _quote_aware_segments(text)
+        for item in segments:
+            item["voice"] = mapping.get(item["style"]) or mapping.get("neutral")
+        normalized_parts = []
+        for item in segments:
+            if item["kind"] == "dialogue":
+                escaped = item["text"].replace('"', '\\"')
+                prefix = "" if item["style"] == "neutral" else f"[voice:{item['style']}] "
+                normalized_parts.append(f'{prefix}"{escaped}"')
+            else:
+                normalized_parts.append(item["text"])
+        normalized = "\n".join(normalized_parts)
+        clean = " ".join(item["text"] for item in segments)
         styles = ", ".join(dict.fromkeys(item["style"] for item in segments))
         result = (normalized, json.dumps(segments, ensure_ascii=False), clean, styles)
-        return _ui_result("qwen_tts_emotion", result, {"segments": segments, "clean_text": clean, "styles": styles})
+        return _ui_result("qwen_tts_emotion", result, {"segments": segments, "clean_text": clean, "styles": styles, "warnings": warnings})
 
 
 class QwenTTSModelsNode:

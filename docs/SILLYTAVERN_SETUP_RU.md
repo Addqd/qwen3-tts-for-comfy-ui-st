@@ -1,25 +1,80 @@
-# SillyTavern
+# Ручная интеграция с SillyTavern
 
-Проверено по ветке `release` SillyTavern 2026-08-05. Исходные файлы SillyTavern менять не нужно.
+Проект использует встроенный TTS provider **OpenAI Compatible**. Отдельное расширение, копирование файлов и изменение core SillyTavern не нужны. Все шаги ниже выполняет пользователь в интерфейсе; скрипты проекта не переписывают `settings.json`, карточки, чаты, Regex или Voice Map.
 
-1. Запустите backend: `.\start.ps1`.
-2. В SillyTavern откройте верхнюю панель **Extensions** → секцию **TTS**.
-3. Provider: **OpenAI Compatible**.
-4. Provider Endpoint: `http://127.0.0.1:8020/v1/audio/speech` — это полный endpoint, не только `/v1`.
-5. API Key: оставьте пустым. Если UI требует значение, введите произвольное локальное `local`; backend его игнорирует.
-6. Model: `tts-1-ru`.
-7. Available Voices: перечислите через запятую, например `clone:QwenDemoRussianNeutral,clone:QwenDemoSeed`. Актуальный список: `http://127.0.0.1:8020/v1/voices`.
-8. Speed: `1.0`. Нажмите **Apply**.
-9. В Voice Map назначьте персонажу один из введённых voice ID и снова нажмите **Apply**.
+## Архитектура
 
-OpenAI Compatible хранит список голосов вручную: его Refresh не запрашивает `/v1/voices`. Текущий frontend отправляет `{model,input,voice,response_format:"mp3",speed}` на полный Provider Endpoint через локальный proxy SillyTavern — именно эта форма реально протестирована и вернула `audio/mpeg`.
+```text
+ответ персонажа
+  → встроенная TTS-очередь SillyTavern
+  → OpenAI Compatible provider и локальный proxy
+  → http://127.0.0.1:8020/v1/audio/speech
+  → preprocessing, voice library и Emotion Router
+  → один MP3
+  → штатный player SillyTavern
+```
 
-Для автоматической речи включите **Enable** и **Auto-generation**. Для ручной — значок мегафона у сообщения. Опции **Only narrate quotes** и **Ignore text inside asterisks** находятся в общей TTS-секции: первая соответствует прямой речи, выключенное значение — полному ответу. Backend дополнительно поддерживает `preprocessing_mode`, но штатный provider SillyTavern это поле не отправляет, поэтому основной выбор делайте в UI SillyTavern.
+Qwen-модель загружается только backend-процессом. Backend не меняет LLM, промпты и отображаемый текст чата.
 
-Типовые ошибки:
+## Запуск
 
-- `HTTP 500`: проверьте, что указан полный `/v1/audio/speech`, backend запущен и voice ID существует.
-- Voice not found: вручную обновите Available Voices и Voice Map.
-- Нет звука: включите Enable, нажмите Apply, проверьте browser autoplay.
-- Долгое ожидание: CPU на этой машине работает медленнее реального времени; смотрите `status.ps1` и `logs/server.err.log`.
-- Кириллица испорчена только в старой консоли PowerShell: API отдаёт UTF-8 с charset; браузер и Python-клиент проверены корректно.
+1. Запустите только backend двойным щелчком по `start-tts.bat` либо командой `./start.ps1` из корня проекта.
+2. Запустите существующий `Start.bat` самой SillyTavern.
+3. Откройте `http://127.0.0.1:8000`.
+4. Проверьте backend: `http://127.0.0.1:8020/health`.
+
+Эти два запуска независимы. `start-tts.bat` не запускает и не останавливает SillyTavern. Существующий `start-tts-and-comfyui.bat` предназначен только для backend + ComfyUI и не изменён этой интеграцией.
+
+## Настройка provider вручную
+
+В SillyTavern откройте **Extensions → TTS**:
+
+1. Provider: **OpenAI Compatible**.
+2. Endpoint: `http://127.0.0.1:8020/v1/audio/speech`.
+3. Model: `tts-1-ru`.
+4. Speed: `1`.
+5. Добавьте нужные voice IDs вручную: OpenAI-compatible provider не обязан получать их через Refresh.
+6. Включите **Enable**; при необходимости включите **Auto-generation**.
+7. В Voice Map назначьте персонажу neutral-профиль его голосовой семьи и нажмите **Apply**.
+
+Список доступных IDs: `http://127.0.0.1:8020/v1/voices`. Примеры:
+
+```text
+clone:olga_pletneva_neutral
+clone:olga_zubkova_neutral
+clone:elena_shulman_neutral
+clone:lina_ivanova_neutral
+clone:irina_kireeva_neutral
+clone:veronika_sarkisova_neutral
+clone:eliza_martirosova_neutral
+clone:larisa_nekipelova_neutral
+```
+
+## Контракт Emotion Router
+
+Озвучивается весь ответ. Повествование и реплики без тега всегда neutral. Тег относится только к непосредственно следующей полной реплике в обычных ASCII-кавычках `"..."`:
+
+```text
+Она подошла к двери. [voice:happy] "Ты всё-таки пришёл!" Она улыбнулась.
+[voice:whisper] "Только никому не говори." После этого она снова замолчала.
+```
+
+После закрывающей кавычки стиль автоматически сбрасывается в neutral. Поддерживаются `neutral`, `soft`, `whisper`, `breathy`, `happy`, `sad`, `angry`, `tense`. Неизвестный, malformed или стоящий не перед цитатой tag удаляется и не произносится; соответствующая речь остаётся neutral.
+
+Для style backend ищет `<та же семья>_<style>`. Если его нет, используется `<та же семья>_neutral`; если отсутствует и он, применяется настроенный безопасный fallback. Поэтому в Voice Map следует назначать именно neutral-профиль.
+
+Не включайте SillyTavern **Only narrate quotes**: backend должен получить и повествование, и реплики. Regex, который удаляет квадратные скобки или кавычки до TTS, тоже нарушит контракт; проект сам Regex не создаёт и не меняет.
+
+## Проверка транспорта
+
+Когда оба сервиса уже запущены пользователем:
+
+```powershell
+./scripts/test-sillytavern-integration.ps1
+```
+
+Скрипт не меняет настройки и не управляет жизненным циклом SillyTavern. Он получает CSRF token, отправляет тест через локальный proxy и сохраняет MP3 в игнорируемую папку `artifacts/audio-tests`.
+
+HTTP-тест не подтверждает browser autoplay, Stop, replay, group chat и сохранение UI-настроек после перезапуска — это проверяется вручную.
+
+Официальная справка: [SillyTavern TTS](https://docs.sillytavern.app/extensions/tts/) и [Regex](https://docs.sillytavern.app/extensions/regex/).

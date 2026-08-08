@@ -12,34 +12,118 @@ from fastapi.testclient import TestClient
 
 from qwen3_tts_st.app import create_app
 from qwen3_tts_st.config import AppConfig, load_config
-from qwen3_tts_st.emotion import parse_emotion_script, strip_voice_tags
+from qwen3_tts_st.emotion import (
+    parse_emotion_script,
+    parse_emotion_script_detailed,
+    strip_voice_tags,
+)
 from qwen3_tts_st.service import TTSService
+
+
+def parsed(text: str) -> list[tuple[str, str, str]]:
+    return [(item.kind, item.style, item.text) for item in parse_emotion_script(text)]
 
 
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("Обычный русский текст.", [("neutral", "Обычный русский текст.")]),
-        ("[voice:neutral] Спокойно.", [("neutral", "Спокойно.")]),
-        ("[voice:happy] Радость! [voice:sad] Грусть.", [("happy", "Радость!"), ("sad", "Грусть.")]),
-        ("[voice:angry] Раз! [voice:angry] Два!", [("angry", "Раз!"), ("angry", "Два!")]),
-        ("[voice:happy] В одной строке. [voice:tense] И дальше?", [("happy", "В одной строке."), ("tense", "И дальше?")]),
-        ("[voice:soft] Первая строка.\n[voice:whisper] Вторая строка.", [("soft", "Первая строка."), ("whisper", "Вторая строка.")]),
-        ("До тега — текст, да?! [voice:breathy] После: «текст»...", [("neutral", "До тега — текст, да?!"), ("breathy", "После: «текст»...")]),
+        ("Она подошла к окну.", [("narration", "neutral", "Она подошла к окну.")]),
+        ('"Ты уже закончил?"', [("dialogue", "neutral", "Ты уже закончил?")]),
+        ('[voice:happy] "Ты пришёл!"', [("dialogue", "happy", "Ты пришёл!")]),
+        ('[voice:happy]\n"Ты пришёл!"', [("dialogue", "happy", "Ты пришёл!")]),
+        (
+            '[voice:angry] "Отстань!"\nОна отвернулась.',
+            [("dialogue", "angry", "Отстань!"), ("narration", "neutral", "Она отвернулась.")],
+        ),
+        (
+            '[voice:angry] "Отстань!"\nОна отвернулась.\n"Я не хочу говорить."',
+            [
+                ("dialogue", "angry", "Отстань!"),
+                ("narration", "neutral", "Она отвернулась."),
+                ("dialogue", "neutral", "Я не хочу говорить."),
+            ],
+        ),
+        (
+            'Она остановилась.\n[voice:tense] "Ты слышал?"\nОна замерла.\n[voice:whisper] "Тише."',
+            [
+                ("narration", "neutral", "Она остановилась."),
+                ("dialogue", "tense", "Ты слышал?"),
+                ("narration", "neutral", "Она замерла."),
+                ("dialogue", "whisper", "Тише."),
+            ],
+        ),
+        (
+            '[voice:angry] "Ты издеваешься?\nЯ дважды предупреждала.\nИ ты всё равно это сделал."',
+            [("dialogue", "angry", "Ты издеваешься?\nЯ дважды предупреждала.\nИ ты всё равно это сделал.")],
+        ),
+        (
+            '[voice:tense] "Он действительно сказал «уходи»?"',
+            [("dialogue", "tense", "Он действительно сказал «уходи»?")],
+        ),
+        (
+            'Ёжик спросил 😊: [voice:soft] "Всё-таки пойдём?.."',
+            [
+                ("narration", "neutral", "Ёжик спросил 😊:"),
+                ("dialogue", "soft", "Всё-таки пойдём?.."),
+            ],
+        ),
+        (
+            '[voice:tense] "Он сказал: \\"не двигайся\\" — и замолчал."',
+            [("dialogue", "tense", 'Он сказал: "не двигайся" — и замолчал.')],
+        ),
     ],
 )
-def test_parser_preserves_unicode_order_and_punctuation(text, expected):
-    assert [(item.style, item.text) for item in parse_emotion_script(text)] == expected
+def test_quote_aware_parser_contract(text, expected):
+    assert parsed(text) == expected
 
 
-def test_unknown_tag_becomes_neutral_and_is_removed():
-    text = "[voice:happy] Да! [voice:EXCITED] Но неизвестный стиль."
-    segments = parse_emotion_script(text)
-    assert [(item.style, item.text) for item in segments] == [
-        ("happy", "Да!"),
-        ("neutral", "Но неизвестный стиль."),
+def test_invalid_narration_tag_is_removed_and_neutral():
+    segments, warnings = parse_emotion_script_detailed("[voice:happy] Она улыбнулась.")
+    assert [(item.kind, item.style, item.text) for item in segments] == [
+        ("narration", "neutral", "Она улыбнулась.")
     ]
-    assert "voice:" not in strip_voice_tags(text)
+    assert warnings == ["voice_tag_ignored_no_following_quoted_dialogue"]
+    assert "voice:" not in segments[0].text
+
+
+def test_unknown_and_malformed_tags_are_neutral_and_never_spoken():
+    text = '[voice:confused] "Что?" [voice: happy] "Правда?" [voice:] narration'
+    segments, warnings = parse_emotion_script_detailed(text)
+    assert [(item.kind, item.style, item.text) for item in segments] == [
+        ("dialogue", "neutral", "Что?"),
+        ("dialogue", "neutral", "Правда?"),
+        ("narration", "neutral", "narration"),
+    ]
+    assert "unknown_voice_tag_neutral_fallback" in warnings
+    assert "malformed_voice_tag_neutral_fallback" in warnings
+    assert "voice_tag_ignored_no_following_quoted_dialogue" in warnings
+    assert "voice:" not in " ".join(item.text for item in segments).lower()
+    assert "voice:" not in strip_voice_tags(text).lower()
+
+
+def test_multiple_tags_are_deterministic_and_last_tag_wins():
+    segments, warnings = parse_emotion_script_detailed(
+        '[voice:happy] [voice:angry] "Последний тег определяет подачу."'
+    )
+    assert segments[0].style == "angry"
+    assert warnings == ["multiple_voice_tags_last_wins"]
+
+
+def test_empty_dialogue_and_unclosed_quote_do_not_crash():
+    empty, empty_warnings = parse_emotion_script_detailed('[voice:happy] "" После.')
+    assert [(item.kind, item.style, item.text) for item in empty] == [
+        ("narration", "neutral", "После.")
+    ]
+    assert "empty_dialogue_ignored" in empty_warnings
+
+    unclosed, unclosed_warnings = parse_emotion_script_detailed(
+        '[voice:angry] "Незакрытая реплика'
+    )
+    assert [(item.kind, item.style, item.text) for item in unclosed] == [
+        ("narration", "neutral", "Незакрытая реплика")
+    ]
+    assert "unclosed_dialogue_treated_as_neutral" in unclosed_warnings
+    assert "voice_tag_ignored_no_following_quoted_dialogue" in unclosed_warnings
 
 
 def test_empty_text_has_no_segments():
@@ -55,15 +139,21 @@ def _make_config(tmp_path: Path) -> AppConfig:
     return AppConfig(data, tmp_path / "test.yaml")
 
 
-def _add_profile(service: TTSService, tmp_path: Path, style: str) -> str:
-    source = tmp_path / f"{style}.wav"
+def _add_profile(
+    service: TTSService,
+    tmp_path: Path,
+    style: str,
+    character: str = "TestRuRouter",
+    prefix: str = "test_ru_router",
+) -> str:
+    source = tmp_path / f"{prefix}-{style}.wav"
     rate = 24000
     sf.write(source, 0.1 * np.sin(2 * np.pi * 220 * np.arange(rate * 2) / rate), rate)
-    display = f"test_ru_router_{style}"
+    display = f"{prefix}_{style}"
     profile, _ = service.library.create(
         source,
         {
-            "character": "TestRuRouter",
+            "character": character,
             "profile_id": display,
             "display_name": display,
             "style": style,
@@ -73,12 +163,22 @@ def _add_profile(service: TTSService, tmp_path: Path, style: str) -> str:
     return profile.voice_id
 
 
-def test_service_selects_profiles_falls_back_and_never_synthesizes_tags(tmp_path, monkeypatch):
+def _request(text: str, voice: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        input=text,
+        preprocessing_mode="all",
+        voice=voice,
+        speed=1.0,
+        response_format="wav",
+    )
+
+
+def test_service_uses_neutral_narration_quote_scope_and_clean_worker_text(tmp_path, monkeypatch):
     service = TTSService(_make_config(tmp_path))
     neutral = _add_profile(service, tmp_path, "neutral")
     happy = _add_profile(service, tmp_path, "happy")
-    sad = _add_profile(service, tmp_path, "sad")
-    angry = _add_profile(service, tmp_path, "angry")
+    tense = _add_profile(service, tmp_path, "tense")
+    whisper = _add_profile(service, tmp_path, "whisper")
     captured: list[tuple[str, str]] = []
     original = service.worker.synthesize
 
@@ -87,35 +187,95 @@ def test_service_selects_profiles_falls_back_and_never_synthesizes_tags(tmp_path
         return original(text, profile, language)
 
     monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
-    request = SimpleNamespace(
-        input=(
-            "[voice:neutral] Сейчас я говорю спокойно. "
-            "[voice:happy] А теперь я очень рад! "
-            "[voice:sad] Но потом мне стало грустно. "
-            "[voice:angry] И наконец я разозлился! "
-            "[voice:soft] Для этого стиля профиля нет."
+    request = _request(
+        (
+            'Она остановилась. [voice:tense] "Ты слышал?" '
+            'Она замерла. [voice:whisper] "Тише." '
+            '[voice:soft] "Для soft-профиля используется neutral."'
         ),
-        preprocessing_mode="all",
-        voice="missing-requested-profile",
-        speed=1.0,
-        response_format="wav",
+        happy,
     )
     payload, media_type, metadata = asyncio.run(service.synthesize(request))
 
     assert media_type == "audio/wav"
     assert payload.startswith(b"RIFF")
-    assert metadata["styles"] == ["neutral", "happy", "sad", "angry", "soft"]
-    assert metadata["voices"] == [neutral, happy, sad, angry, neutral]
+    assert metadata["styles"] == ["neutral", "tense", "neutral", "whisper", "soft"]
+    assert metadata["segment_types"] == ["narration", "dialogue", "narration", "dialogue", "dialogue"]
+    assert metadata["voices"] == [neutral, tense, neutral, whisper, neutral]
     assert [voice for _, voice in captured] == metadata["voices"]
-    assert [text for text, _ in captured] == [
-        "Сейчас я говорю спокойно.",
-        "А теперь я очень рад!",
-        "Но потом мне стало грустно.",
-        "И наконец я разозлился!",
-        "Для этого стиля профиля нет.",
-    ]
-    assert all("[voice:" not in text for text, _ in captured)
+    assert all("[voice:" not in text.lower() for text, _ in captured)
+    assert all('"' not in text for text, _ in captured)
+    assert metadata["router_warnings"] == []
     assert metadata["duration_seconds"] > 0
+
+
+def test_missing_emotion_dynamically_falls_back_then_uses_new_profile(tmp_path, monkeypatch):
+    service = TTSService(_make_config(tmp_path))
+    neutral = _add_profile(service, tmp_path, "neutral")
+    selected: list[str] = []
+    original = service.worker.synthesize
+
+    def recording_synthesize(text, profile, language):
+        selected.append(profile.voice_id)
+        return original(text, profile, language)
+
+    monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
+    asyncio.run(service.synthesize(_request('[voice:happy] "Привет!"', neutral)))
+    assert selected[-1] == neutral
+
+    happy = _add_profile(service, tmp_path, "happy")
+    asyncio.run(service.synthesize(_request('[voice:happy] "Привет!"', neutral)))
+    assert selected[-1] == happy
+
+
+def test_emotional_request_voice_still_uses_family_neutral_for_narration(tmp_path, monkeypatch):
+    service = TTSService(_make_config(tmp_path))
+    neutral = _add_profile(service, tmp_path, "neutral")
+    happy = _add_profile(service, tmp_path, "happy")
+    selected: list[str] = []
+    original = service.worker.synthesize
+
+    def recording_synthesize(text, profile, language):
+        selected.append(profile.voice_id)
+        return original(text, profile, language)
+
+    monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
+    asyncio.run(service.synthesize(_request('Описание. "Обычная реплика."', happy)))
+    assert selected == [neutral, neutral]
+
+
+def test_missing_family_neutral_uses_configured_safe_neutral(tmp_path, monkeypatch):
+    service = TTSService(_make_config(tmp_path))
+    safe = _add_profile(service, tmp_path, "neutral")
+    orphan_happy = _add_profile(
+        service,
+        tmp_path,
+        "happy",
+        character="OrphanFamily",
+        prefix="orphan",
+    )
+    selected: list[str] = []
+    original = service.worker.synthesize
+
+    def recording_synthesize(text, profile, language):
+        selected.append(profile.voice_id)
+        return original(text, profile, language)
+
+    monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
+    asyncio.run(service.synthesize(_request('Нейтральное описание.', orphan_happy)))
+    assert selected == [safe]
+
+
+def test_only_service_tags_produce_clear_api_error(tmp_path):
+    service = TTSService(_make_config(tmp_path))
+    _add_profile(service, tmp_path, "neutral")
+    with TestClient(create_app(config=service.config)) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            json={"voice": "clone:test_ru_router_neutral", "input": "[voice:happy]", "response_format": "wav"},
+        )
+    assert response.status_code == 422
+    assert "произносимого текста" in response.text
 
 
 def test_empty_api_input_is_rejected(tmp_path):

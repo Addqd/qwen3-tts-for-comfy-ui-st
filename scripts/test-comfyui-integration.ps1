@@ -66,7 +66,7 @@ $DiagnosticPrompt = [ordered]@{
     "2" = @{ class_type = "QwenTTSHealth"; inputs = @{ server = @("1", 0) } }
     "3" = @{ class_type = "QwenTTSModels"; inputs = @{ server = @("1", 0) } }
     "4" = @{ class_type = "QwenTTSVoiceSelector"; inputs = @{ server = @("1", 0); voice = "clone:QwenDemoRussianNeutral" } }
-    "5" = @{ class_type = "QwenTTSEmotionScript"; inputs = @{ text = "[voice:neutral] Тихо. [voice:happy] Радостно! [voice:unknown] Безопасный fallback."; character_profile_mapping = "{`"neutral`":`"clone:QwenDemoRussianNeutral`",`"happy`":`"clone:QwenDemoHappyCandidate`"}" } }
+    "5" = @{ class_type = "QwenTTSEmotionScript"; inputs = @{ text = 'Тихое повествование. [voice:happy] "Радостная реплика!" Снова нейтрально. [voice:unknown] "Безопасный fallback."'; character_profile_mapping = "{`"neutral`":`"clone:QwenDemoRussianNeutral`",`"happy`":`"clone:QwenDemoHappyCandidate`"}" } }
     "6" = @{ class_type = "QwenTTSVoiceSelector"; inputs = @{ server = @("1", 0); voice = "clone:DefinitelyMissingProfile" } }
 }
 $DiagnosticJob = Submit-ComfyPrompt -Prompt $DiagnosticPrompt -Timeout 120
