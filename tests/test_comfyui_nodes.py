@@ -57,6 +57,7 @@ def test_example_workflows_are_valid_json_with_available_node_types():
         "emotion_router_test_ru.json",
         "emotion_script_preview.json",
         "text_to_speech_ru.json",
+        "text_to_speech_models_ru.json",
         "text_to_speech_with_emotions_ru.json",
         "voice_profile_from_wav_ru.json",
         "voice_clone_and_synthesize_ru.json",
@@ -136,6 +137,100 @@ def test_clone_voice_dropdown_contains_all_delivery_styles():
     styles = nodes.QwenTTSCloneVoiceNode.INPUT_TYPES()["required"]["style"][0]
     assert styles == list(nodes.ALLOWED_STYLES)
     assert styles[-2:] == ["pleasure", "intimate"]
+
+
+def test_synthesize_exposes_model_quality_and_russian_controls(monkeypatch):
+    nodes = load_nodes()
+    inputs = nodes.QwenTTSSynthesizeNode.INPUT_TYPES()
+    assert inputs["required"]["model"][0] == [
+        "Inherit Server model",
+        "Backend Default (tts-1-ru)",
+        "0.6B Fast (tts-1-ru-fast)",
+        "1.7B Quality (tts-1-ru-quality)",
+    ]
+    assert inputs["optional"]["generation_preset"][0] == ["Default", "Stable Russian"]
+    assert inputs["optional"]["russian_normalization"][0] == [
+        "Off",
+        "Basic Russian",
+        "Full Russian",
+    ]
+    assert inputs["required"]["model"][1]["default"] == "Inherit Server model"
+
+    captured = {}
+
+    class Headers(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+    def response(_server, path, payload=None):
+        assert path == "/v1/audio/speech"
+        captured.update(payload)
+        return b"RIFF", Headers({"X-Audio-Duration": "1.25", "X-TTS-Resolved-Model": "qwen3-tts-1.7b"})
+
+    class FakeWaveform:
+        shape = (1, 1, 30000)
+
+    monkeypatch.setattr(nodes, "_json_request", response)
+    monkeypatch.setattr(nodes, "_load_comfy_audio", lambda _path: {"waveform": FakeWaveform(), "sample_rate": 24000})
+    result = result_of(
+        nodes.QwenTTSSynthesizeNode().synthesize(
+            {"endpoint": "http://127.0.0.1:8020", "timeout": 10, "model": "tts-1-ru"},
+            "Qwen готов.",
+            "clone:QwenDemoRussianNeutral",
+            1.0,
+            "1.7B Quality (tts-1-ru-quality)",
+            "wav",
+            "all",
+            generation_preset="Stable Russian",
+            russian_normalization="Full Russian",
+            pronunciation_overrides="Qwen = куэн",
+        )
+    )
+    assert captured["model"] == "tts-1-ru-quality"
+    assert captured["generation_preset"] == "stable_russian"
+    assert captured["russian_normalization"] == "full"
+    assert captured["pronunciation_overrides"] == {"Qwen": "куэн"}
+    metadata = json.loads(result[2])
+    assert metadata["resolved_model"] == "qwen3-tts-1.7b"
+    assert metadata["pronunciation_override_count"] == 1
+
+
+def test_synthesize_inherits_quality_server_model_and_keeps_legacy_values(monkeypatch):
+    nodes = load_nodes()
+    captured = {}
+
+    class FakeWaveform:
+        shape = (1, 1, 2400)
+
+    def response(_server, _path, payload=None):
+        captured.update(payload)
+        return b"RIFF", {"X-Audio-Duration": "0.1"}
+
+    monkeypatch.setattr(nodes, "_json_request", response)
+    monkeypatch.setattr(
+        nodes,
+        "_load_comfy_audio",
+        lambda _path: {"waveform": FakeWaveform(), "sample_rate": 24000},
+    )
+    nodes.QwenTTSSynthesizeNode().synthesize(
+        {"endpoint": "http://127.0.0.1:8020", "timeout": 10, "model": "tts-1-ru-quality"},
+        "Тест.",
+        "clone:QwenDemoRussianNeutral",
+        1.0,
+        "Inherit Server model",
+        "wav",
+        "all",
+    )
+    assert captured["model"] == "tts-1-ru-quality"
+    legacy_values = {
+        "tts-1-ru": "tts-1-ru",
+        "tts-1-ru-fast": "tts-1-ru-fast",
+        "tts-1-ru-quality": "tts-1-ru-quality",
+        "Backend Default (tts-1-ru)": "tts-1-ru",
+        "0.6B Fast (tts-1-ru-fast)": "tts-1-ru-fast",
+        "1.7B Quality (tts-1-ru-quality)": "tts-1-ru-quality",
+    }
+    assert {value: nodes._model_alias(value, {}) for value in legacy_values} == legacy_values
 
 
 def test_comfy_clone_conversion_preserves_input_sample_rate():

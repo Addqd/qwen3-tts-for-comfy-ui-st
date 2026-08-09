@@ -13,7 +13,9 @@ ComfyUI ─────┼─ HTTP 127.0.0.1:8020 ─ FastAPI ─ preprocessing 
 
 Backend — единственный владелец Qwen/PyTorch и общей библиотеки голосов. ComfyUI-пакет использует только стандартную библиотеку и NumPy, загружает ответ штатным ComfyUI audio loader и возвращает `{"waveform": [B,C,T], "sample_rate": int}`. Это исключает вторую копию модели и конфликт зависимостей ComfyUI.
 
-Persistent CPU/CUDA создаёт один worker и сериализует работу семафором. `cuda_on_demand` запускает отдельный процесс на запрос, ждёт результат с timeout и завершает процесс, чтобы вернуть VRAM. `auto` только наблюдает CPU/RAM/VRAM/процессы; внешнюю AI-нагрузку не запускает и не останавливает.
+`ModelRegistry` разрешает публичные alias `tts-1-ru`, `tts-1-ru-fast`, `tts-1-ru-quality` в конкретные Hugging Face ID и model-specific runtime. `ModelManager` владеет единственной activation: при смене alias сначала выгружает текущий worker, затем активирует новый; скрытого fallback нет. Старые single-model overrides нормализуются в default registry entry при загрузке config, а явно заданные современные `models.*` имеют приоритет.
+
+Persistent CPU/CUDA создаёт один worker. Поскольку все модели используют один `ModelManager`, семафор сериализует полный lifecycle `prepare → все chunks → encode/completion`, поэтому второй request не может переключить модель у первого. `queue.max_concurrent` сохраняется как configured value для диагностики, но effective model concurrency сейчас равен `1`; оба значения показывает `/health`. `cuda_on_demand` запускает отдельный процесс на chunk, ждёт результат с timeout и всегда выгружает worker через `finally`, чтобы вернуть VRAM. `auto` только наблюдает CPU/RAM/VRAM/процессы; внешнюю AI-нагрузку не запускает и не останавливает.
 
 Base 0.6B не получает выдуманные style-инструкции. Emotion router выбирает реальные ICL-профили, синтезирует сегменты, приводит их к одному sample rate, добавляет паузы и короткие edge fades. Legacy key `crossfade_ms` не выполняет overlap crossfade. Из pause keys синтез сейчас применяет только `segment_ms`; `sentence_ms`/`paragraph_ms` зарезервированы для совместимости.
 

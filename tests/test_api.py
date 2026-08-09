@@ -32,7 +32,14 @@ def make_test_config(tmp_path: Path) -> AppConfig:
 
 def test_endpoints_and_unicode_wav(tmp_path):
     with TestClient(create_app(config=make_test_config(tmp_path))) as client:
-        assert client.get("/health").status_code == 200
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.json()["default_model"] == "tts-1-ru"
+        assert health.json()["available_models"] == [
+            "tts-1-ru",
+            "tts-1-ru-fast",
+            "tts-1-ru-quality",
+        ]
         assert client.get("/v1/models").status_code == 200
         assert client.get("/v1/voices").json()["data"][0]["display_name"] == "TestNeutral"
         response = client.post("/v1/audio/speech", json={
@@ -44,6 +51,47 @@ def test_endpoints_and_unicode_wav(tmp_path):
         assert b"voice:happy" not in response.content
 
 
+def test_model_catalog_and_request_level_quality_controls(tmp_path):
+    with TestClient(create_app(config=make_test_config(tmp_path))) as client:
+        catalog = client.get("/v1/models").json()["data"]
+        assert [item["id"] for item in catalog] == [
+            "tts-1-ru",
+            "tts-1-ru-fast",
+            "tts-1-ru-quality",
+        ]
+        response = client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "tts-1-ru-quality",
+                "voice": "clone:TestNeutral",
+                "input": "Qwen готов на 25% к 12:30.",
+                "response_format": "wav",
+                "generation_preset": "stable_russian",
+                "russian_normalization": "full",
+                "pronunciation_overrides": {"Qwen": "куэн"},
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["x-tts-resolved-model"] == "qwen3-tts-1.7b"
+        assert response.headers["x-tts-generation-preset"] == "stable_russian"
+        assert response.headers["x-tts-russian-normalization"] == "full"
+        metrics = client.get("/metrics").json()["last"]
+        assert metrics["resolved_hf_id"].endswith("1.7B-Base")
+        assert metrics["model_action"] == "switched"
+        assert metrics["pronunciation_replacements"] == 1
+        assert metrics["generation"][0]["generation_kwargs"]["temperature"] == 0.75
+
+
+def test_unknown_model_is_clear_422_without_fallback(tmp_path):
+    with TestClient(create_app(config=make_test_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            json={"model": "not-a-real-model", "voice": "clone:TestNeutral", "input": "Тест."},
+        )
+    assert response.status_code == 422
+    assert "not-a-real-model" in response.text
+
+
 def test_sillytavern_mp3_shape(tmp_path):
     with TestClient(create_app(config=make_test_config(tmp_path))) as client:
         response = client.post("/v1/audio/speech", json={
@@ -52,6 +100,27 @@ def test_sillytavern_mp3_shape(tmp_path):
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("audio/mpeg")
         assert response.content[:3] in {b"ID3", b"\xff\xfb", b"\xff\xf3"}
+        metrics = client.get("/metrics").json()["last"]
+        assert metrics["generation_preset"] == "stable_russian"
+        assert metrics["russian_normalization"] == "full"
+
+
+def test_explicit_default_and_off_override_integration_compatible_defaults(tmp_path):
+    with TestClient(create_app(config=make_test_config(tmp_path))) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "tts-1-ru",
+                "voice": "TestNeutral",
+                "input": "Тест 12:01.",
+                "generation_preset": "default",
+                "russian_normalization": "off",
+            },
+        )
+        assert response.status_code == 200, response.text
+        metrics = client.get("/metrics").json()["last"]
+        assert metrics["generation_preset"] == "default"
+        assert metrics["russian_normalization"] == "off"
 
 
 def test_clone_rejects_non_wav_and_requires_consent(tmp_path):

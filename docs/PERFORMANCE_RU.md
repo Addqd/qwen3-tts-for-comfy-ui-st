@@ -1,5 +1,15 @@
 # Производительность и совместимость
 
+## 2026-08-09 — request-level 1.7B и переключение моделей
+
+- `Qwen/Qwen3-TTS-12Hz-1.7B-Base` впервые скачана в project-local `model_cache`; фактический cache footprint после загрузки — 4,23 GB.
+- Первый CPU cold load 1.7B занял 149,52 с; после полного cache повторный load занял около 11,4 с.
+- Реальный 1.7B Stable Russian WAV: mono, 24 kHz, 1,44 с, finite samples, peak 0,503448.
+- Реальный переход в одном backend-процессе `1.7B quality → 0.6B fast` завершился без fallback. Финальные metrics: quality `model_action=loaded`, fast `model_action=switched`, active model после запроса — `qwen3-tts-0.6b`.
+- Во время первой проверки найден и исправлен повторный вызов `torch.set_num_interop_threads` после CPU parallel work; regression test подтверждает одноразовую настройку interop pool.
+- ComfyUI 0.30.0 с node package 0.4.0 реально выполнил Server → Synthesize → Preview Audio. Backend metrics: 0.6B CPU load 11,23 с, synthesis 11,75 с для 1,6 с результата, `Stable Russian`, `Full Russian`, одна pronunciation replacement.
+- Это техническая проверка корректности и ресурсов, а не субъективное сравнение качества 0.6B/1.7B.
+
 Дата тестов: 2026-08-05. Модель: `Qwen/Qwen3-TTS-12Hz-0.6B-Base`, Russian, ICL voice cloning, SDPA. Внешние процессы не завершались.
 
 | Режим | Стек | Результат |

@@ -16,7 +16,27 @@ import numpy as np
 
 
 CATEGORY = "Qwen TTS API"
-VERSION = "0.3.0"
+VERSION = "0.4.1"
+INHERIT_SERVER_MODEL = "Inherit Server model"
+SERVER_MODEL_OPTIONS = (
+    "Backend Default (tts-1-ru)",
+    "0.6B Fast (tts-1-ru-fast)",
+    "1.7B Quality (tts-1-ru-quality)",
+)
+SYNTH_MODEL_OPTIONS = (INHERIT_SERVER_MODEL, *SERVER_MODEL_OPTIONS)
+# Compatibility for callers that imported the former public constant.
+MODEL_OPTIONS = SERVER_MODEL_OPTIONS
+MODEL_ALIASES = {
+    INHERIT_SERVER_MODEL: "",
+    SERVER_MODEL_OPTIONS[0]: "tts-1-ru",
+    SERVER_MODEL_OPTIONS[1]: "tts-1-ru-fast",
+    SERVER_MODEL_OPTIONS[2]: "tts-1-ru-quality",
+    "tts-1-ru": "tts-1-ru",
+    "tts-1-ru-fast": "tts-1-ru-fast",
+    "tts-1-ru-quality": "tts-1-ru-quality",
+}
+GENERATION_PRESET_OPTIONS = ("Default", "Stable Russian")
+NORMALIZATION_OPTIONS = ("Off", "Basic Russian", "Full Russian")
 ALLOWED_STYLES = (
     "neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense", "pleasure", "intimate"
 )
@@ -140,6 +160,35 @@ def _endpoint(value: str) -> str:
     return endpoint
 
 
+def _model_alias(value: str | None, server: dict) -> str:
+    raw = (value or "").strip()
+    selected = MODEL_ALIASES.get(raw, raw)
+    return (selected or str(server.get("model") or "tts-1-ru")).strip()
+
+
+def _generation_preset(value: str) -> str:
+    return {"Default": "default", "Stable Russian": "stable_russian"}.get(value, value)
+
+
+def _normalization_mode(value: str) -> str:
+    return {"Off": "off", "Basic Russian": "basic", "Full Russian": "full"}.get(value, value)
+
+
+def _pronunciation_overrides(value: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for number, raw_line in enumerate((value or "").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(f"Pronunciation overrides line {number} must use source = replacement")
+        source, replacement = (part.strip() for part in line.split("=", 1))
+        if not source or not replacement:
+            raise ValueError(f"Pronunciation overrides line {number} has an empty source or replacement")
+        result[source] = replacement
+    return result
+
+
 def _json_request(server: dict, path: str, payload: dict | None = None) -> tuple[Any, Any]:
     url = _endpoint(server["endpoint"]) + path
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -215,7 +264,7 @@ class QwenTTSServerNode:
         return {"required": {
             "endpoint": ("STRING", {"default": "http://127.0.0.1:8020"}),
             "timeout": ("INT", {"default": 900, "min": 1, "max": 3600}),
-            "model": ("STRING", {"default": "tts-1-ru"}),
+            "model": (list(SERVER_MODEL_OPTIONS), {"default": SERVER_MODEL_OPTIONS[0]}),
             "response_format": (["wav", "mp3", "flac", "opus", "aac"], {"default": "wav"}),
         }}
 
@@ -225,7 +274,7 @@ class QwenTTSServerNode:
     CATEGORY = CATEGORY
 
     def connect(self, endpoint, timeout, model, response_format):
-        server = {"endpoint": _endpoint(endpoint), "timeout": timeout, "model": model, "response_format": response_format}
+        server = {"endpoint": _endpoint(endpoint), "timeout": timeout, "model": _model_alias(model, {}), "response_format": response_format}
         try:
             health, _ = _json_request(server, "/health")
             status = f"ok: {health.get('mode')} / {health.get('device')} / voices={health.get('voice_count')}"
@@ -243,11 +292,24 @@ class QwenTTSSynthesizeNode:
                 "text": ("STRING", {"multiline": True, "default": "Здравствуйте! Это проверка Qwen3-TTS."}),
                 "voice": ("STRING", {"default": "clone:QwenDemoRussianNeutral"}),
                 "speed": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.05}),
-                "model": ("STRING", {"default": "tts-1-ru"}),
+                "model": (list(SYNTH_MODEL_OPTIONS), {"default": INHERIT_SERVER_MODEL}),
                 "response_format": (["wav", "mp3", "flac", "opus", "aac"], {"default": "wav"}),
                 "preprocessing_mode": (["all", "direct_speech"], {"default": "all"}),
             },
-            "optional": {"emotion_script": ("STRING", {"multiline": True, "default": ""})},
+            "optional": {
+                # Keep emotion_script first for migration of version 0.3 workflows.
+                "emotion_script": ("STRING", {"multiline": True, "default": ""}),
+                "generation_preset": (list(GENERATION_PRESET_OPTIONS), {"default": "Default"}),
+                "russian_normalization": (list(NORMALIZATION_OPTIONS), {"default": "Off"}),
+                "pronunciation_overrides": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "default": "",
+                        "placeholder": "Qwen = куэн\nComfyUI = комфи ю ай",
+                    },
+                ),
+            },
         }
 
     RETURN_TYPES = ("AUDIO", "STRING", "STRING", "FLOAT")
@@ -256,9 +318,32 @@ class QwenTTSSynthesizeNode:
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
 
-    def synthesize(self, server, text, voice, speed, model, response_format, preprocessing_mode, emotion_script=""):
+    def synthesize(
+        self,
+        server,
+        text,
+        voice,
+        speed,
+        model,
+        response_format,
+        preprocessing_mode,
+        emotion_script="",
+        generation_preset="Default",
+        russian_normalization="Off",
+        pronunciation_overrides="",
+    ):
         spoken = emotion_script.strip() or text
-        payload = {"model": model or server["model"], "voice": voice, "input": spoken, "speed": speed, "response_format": response_format, "preprocessing_mode": preprocessing_mode}
+        payload = {
+            "model": _model_alias(model, server),
+            "voice": voice,
+            "input": spoken,
+            "speed": speed,
+            "response_format": response_format,
+            "preprocessing_mode": preprocessing_mode,
+            "generation_preset": _generation_preset(generation_preset),
+            "russian_normalization": _normalization_mode(russian_normalization),
+            "pronunciation_overrides": _pronunciation_overrides(pronunciation_overrides),
+        }
         body, headers = _json_request(server, "/v1/audio/speech", payload)
         stamp = int(time.time() * 1000)
         response_path = _temp_dir() / f"qwen-tts-{stamp}.{response_format}"
@@ -269,7 +354,21 @@ class QwenTTSSynthesizeNode:
             path = _temp_dir() / f"qwen-tts-{stamp}.wav"
             path.write_bytes(_audio_to_wav_bytes(audio))
         duration = float(headers.get("X-Audio-Duration", audio["waveform"].shape[-1] / audio["sample_rate"]))
-        metadata = json.dumps({"model": payload["model"], "voice": voice, "format": response_format, "sample_rate": audio["sample_rate"], "duration": duration, "node_version": VERSION}, ensure_ascii=False)
+        metadata = json.dumps(
+            {
+                "requested_model": payload["model"],
+                "resolved_model": headers.get("X-TTS-Resolved-Model"),
+                "generation_preset": payload["generation_preset"],
+                "russian_normalization": payload["russian_normalization"],
+                "pronunciation_override_count": len(payload["pronunciation_overrides"]),
+                "voice": voice,
+                "format": response_format,
+                "sample_rate": audio["sample_rate"],
+                "duration": duration,
+                "node_version": VERSION,
+            },
+            ensure_ascii=False,
+        )
         result = (audio, str(path), metadata, duration)
         return _ui_result("qwen_tts_synthesis", result, metadata)
 

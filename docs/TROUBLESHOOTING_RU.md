@@ -28,6 +28,12 @@ Get-Content .\logs\server.err.log -Tail 100
 
 **CUDA OOM / мало VRAM.** Проверьте `nvidia-smi`, затем CPU. Не уменьшайте safety reserve вслепую. Проверенный FP32 `cuda_on_demand` освобождает VRAM после запроса, но для загрузки всё равно требует безопасный начальный запас.
 
+**Первый запрос после смены 0.6B/1.7B медленный.** Это ожидаемый cold request: один `ModelManager` сначала выгружает resident model, затем загружает выбранную. `/health` показывает backend default, available aliases и текущую active model; `/metrics` — фактически разрешённую модель без silent fallback.
+
+**`queue.max_concurrent` больше 1, но effective равно 1.** Это защитный контракт единственного model manager: полный persistent synthesis lifecycle сериализован, чтобы параллельный request не переключил activation в середине генерации. Configured и effective значения доступны в `/health`.
+
+**Старый `config.local.yaml` использует только `model.id/dtype/attention/max_new_tokens`.** Loader переносит только явно заданные legacy keys в default registry entry. Если одновременно заданы современные `models.available.*`, они имеют приоритет. Проверьте результат через `/v1/models` и `/health`.
+
 **Port 8020 занят.** `start.ps1` покажет PID. Измените только `server.port` в `config.local.yaml` и endpoint клиентов; не завершайте неизвестный процесс.
 
 **Voice not found.** `Invoke-RestMethod http://127.0.0.1:8020/v1/voices`. Проверьте `metadata.json`, `reference.wav` и fallback. Перезагрузите: `Invoke-RestMethod -Method Post http://127.0.0.1:8020/admin/reload-voices`.

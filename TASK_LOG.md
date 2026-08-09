@@ -1,5 +1,26 @@
 # Журнал выполнения
 
+## 2026-08-09 — follow-up по review PR #6
+
+- Работа продолжена от точного старого HEAD PR #6 `832185f360e566ebbfcb8d5b959d14e16d0fb9e4` в существующей ветке `feature/multi-model-russian-quality-20260809`; новый PR не создавался.
+- Проверены и адресованы семь открытых замечаний CodeRabbit: benchmark limits, безопасный словарь `е/ё`, женский род числительных, наследование модели ComfyUI, сериализация model lifecycle, гарантированный cleanup worker и буквальный язык `Russian`.
+- Дополнительно восстановлена совместимость старых `config.local.yaml`, уточнены SillyTavern defaults `stable_russian + full`, расширен `/health`, актуализированы русские гайды и удалены четыре побайтно дублирующихся screenshot-файла без подделки изображений.
+- Реальный CPU smoke при занятой внешними процессами GPU прошёл в одном backend-процессе: `0.6B Fast → 1.7B Quality → 0.6B Fast`, без silent fallback и повторного скачивания моделей. Получены валидные mono WAV 24 kHz: 3,12 с (peak 0,408081), 3,04 с (peak 0,504181) и 2,64 с (peak 0,552490); после проверки backend остановлен своим `stop.ps1`, порт 8020 освобождён.
+- Полная автоматическая проверка перед публикацией follow-up: `96 passed`; `compileall`, `pip check`, YAML/JSON parsing, ComfyUI install mapping и `git diff --check` прошли.
+
+## 2026-08-09 — выбор 0.6B/1.7B, русский quality pipeline и ComfyUI screenshots
+
+- Работа продолжена от `origin/main` на ветке `feature/multi-model-russian-quality-20260809`; существующие голоса, SillyTavern и внешние процессы не изменялись.
+- Добавлен единый реестр моделей с алиасами `tts-1-ru`, `qwen3-tts-0.6b` и `qwen3-tts-1.7b`, а также безопасный model manager: одновременно загружена не более чем одна модель, переключение выгружает предыдущую, скрытого fallback на другую модель нет.
+- API расширен фактическим `/v1/models`, request-level выбором модели, generation preset, режимом русской нормализации и pronunciation overrides. В ответах и метриках отражаются запрошенная и реально использованная модель, действие загрузки/переключения и параметры preprocessing.
+- Реализованы пресеты `default` и `stable_russian`, нормализация `off/basic/full`, ограниченные преобразования чисел, времени, процентов и десятичных дробей, а также безопасные пользовательские замены произношения.
+- ComfyUI custom nodes обновлены до `0.4.0`: добавлены `Backend Default / 0.6B Fast / 1.7B Quality`, generation preset, Russian normalization и Pronunciation overrides. Добавлен готовый workflow `text_to_speech_models_ru.json`.
+- Ноды установлены в проектный `ComfyUI_windows_portable` штатным скриптом с резервной копией; installer test подтвердил все 7 mappings. Реальный ComfyUI `0.30.0` загрузил новые поля, выполнил workflow и вернул Preview Audio.
+- Обе модели проверены настоящим синтезом: 1.7B Quality и последующее переключение обратно на 0.6B Fast дали корректные mono WAV 24 kHz. Исправлен обнаруженный при реальном переключении повторный вызов `torch.set_num_interop_threads`; добавлен regression test.
+- Для реально работающего интерфейса сняты 9 PNG без приватных путей и токенов в `docs/images/comfyui/`; изображения встроены в русские ComfyUI guides.
+- Документация дополнена единым разделом выбора 0.6B/1.7B и настройки русского TTS, сведениями о производительности и ограничениях SillyTavern/OpenAI-compatible клиентов.
+- Финальная автоматическая suite после исправлений: `78 passed`; порты `127.0.0.1:8020` и `127.0.0.1:8188` после диагностики освобождены.
+
 ## 2026-08-05 — Этап 1 начат
 
 - Получена и полностью прочитана постановка из вложения UTF-8.

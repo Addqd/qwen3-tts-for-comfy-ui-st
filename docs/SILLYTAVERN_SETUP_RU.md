@@ -37,6 +37,16 @@ Qwen-модель загружается только backend-процессом
 6. Включите **Enable**; при необходимости включите **Auto-generation**.
 7. В Voice Map назначьте персонажу neutral-профиль его голосовой семьи и нажмите **Apply**.
 
+Model можно сменить без restart backend:
+
+- `tts-1-ru` — backend default;
+- `tts-1-ru-fast` — 0.6B Fast;
+- `tts-1-ru-quality` — 1.7B Quality.
+
+Первый request после переключения является cold request: backend выгружает предыдущую heavy model, очищает её prompt cache и загружает выбранную. Одновременно resident остаётся только одна heavy model; silent fallback на другой alias не выполняется. Voice Map и voice library общие для всех трёх alias, поэтому отдельная карта для 0.6B/1.7B не нужна.
+
+OpenAI Compatible provider не передаёт custom-поля `generation_preset` и `russian_normalization`. Поэтому его обычный request получает общие backend defaults `stable_russian + full`. Это явная endpoint/config semantics без User-Agent detection. ComfyUI и другие клиенты могут отправить `default`/`off`, и явное значение всегда имеет приоритет.
+
 Список доступных IDs: `http://127.0.0.1:8020/v1/voices`. Примеры:
 
 ```text

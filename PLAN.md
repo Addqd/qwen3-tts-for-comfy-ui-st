@@ -72,6 +72,14 @@
    - Документация разделяет исходный sample rate reference и текущий output 24 kHz; `sentence_ms`/`paragraph_ms` помечены как reserved, `crossfade_ms` — legacy edge-fade key.
    - Полная suite: 65 tests; реальный CPU/Qwen fallback smoke подтвердил `neutral → pleasure → neutral → intimate` и четыре выбора family-neutral.
 
+11. **DONE — Динамические модели и русский quality pipeline**
+   - Добавлен registry для `tts-1-ru`, `tts-1-ru-fast` (0.6B) и `tts-1-ru-quality` (1.7B) с model-specific runtime policy.
+   - Model manager держит не более одного persistent worker, выгружает предыдущую модель до switch и не делает тихий fallback.
+   - Добавлены `default`/`stable_russian`, `off`/`basic`/`full` normalization и глобальный/request pronunciation dictionary.
+   - API health/models/metrics/headers показывают requested/resolved model, action, mode/device/dtype/attention и настройки русского pipeline.
+   - ComfyUI package 0.4.0 содержит выпадающий выбор модели, preset, normalization и pronunciation overrides; добавлены обновлённые workflow и реальные screenshots.
+   - Реально проверены CPU 1.7B load/synthesis, переход 1.7B → 0.6B, project-local ComfyUI Queue → Preview Audio и отсутствие второй Qwen-модели в ComfyUI Python.
+
 ## Блокировки, требующие пользователя
 
 - Собственный разрешённый русский WAV и точная транскрипция, если нужен конкретный пользовательский/персонажный голос.

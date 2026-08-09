@@ -4,12 +4,76 @@ server:
 
 model:
   backend: qwen
+  # Legacy single-model keys are retained for older local overrides.
   id: Qwen/Qwen3-TTS-12Hz-0.6B-Base
   cache_dir: model_cache
   # Turing validation: float16 stalled; float32 completed repeatedly.
   dtype: float32
   attention: sdpa
   max_new_tokens: 2048
+
+models:
+  default: qwen3-tts-0.6b
+  cache_dir: model_cache
+  available:
+    qwen3-tts-0.6b:
+      hf_id: Qwen/Qwen3-TTS-12Hz-0.6B-Base
+      aliases: [tts-1-ru-fast]
+      runtime:
+        mode: inherit
+        dtype: float32
+        attention: sdpa
+        max_new_tokens: 2048
+        minimum_free_vram_mb: 6000
+        safety_reserve_mb: 750
+        reject_shared_memory_pressure: true
+    qwen3-tts-1.7b:
+      hf_id: Qwen/Qwen3-TTS-12Hz-1.7B-Base
+      aliases: [tts-1-ru-quality]
+      runtime:
+        mode: inherit
+        dtype: float32
+        attention: sdpa
+        max_new_tokens: 2048
+        # Deliberately conservative for an 8 GB Turing GPU: auto normally
+        # selects CPU for 1.7B instead of risking an opaque CUDA OOM.
+        minimum_free_vram_mb: 7600
+        safety_reserve_mb: 750
+        reject_shared_memory_pressure: true
+
+generation:
+  presets:
+    default: {}
+    stable_russian:
+      do_sample: true
+      temperature: 0.75
+      top_k: 40
+      top_p: 0.90
+      repetition_penalty: 1.05
+      subtalker_dosample: true
+      subtalker_temperature: 0.75
+      subtalker_top_k: 40
+      subtalker_top_p: 0.90
+
+request_defaults:
+  # OpenAI-compatible clients that cannot send the optional custom fields
+  # (including SillyTavern) receive the stable Russian path. Explicit request
+  # values such as ComfyUI's Default/Off controls always take precedence.
+  generation_preset: stable_russian
+  russian_normalization: full
+
+normalization:
+  # Only explicit lexical replacements are made; there is no unsafe blanket
+  # replacement of every Russian letter e with yo.
+  yo_dictionary:
+    "еще": "ещё"
+    "ее": "её"
+    "елка": "ёлка"
+    "ежик": "ёжик"
+
+pronunciation:
+  # Global deterministic replacements. Request overrides win on key clashes.
+  dictionary: {}
 
 resources:
   mode: auto
@@ -88,6 +152,8 @@ integrations:
   sillytavern:
     model: tts-1-ru
     response_format: mp3
+    recommended_generation_preset: stable_russian
+    recommended_russian_normalization: full
   comfyui:
     endpoint: http://127.0.0.1:8020
     timeout_seconds: 900

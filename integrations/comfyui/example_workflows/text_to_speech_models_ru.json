@@ -1,0 +1,25 @@
+{
+  "last_node_id": 7,
+  "last_link_id": 6,
+  "nodes": [
+    {"id": 1, "type": "QwenTTSServer", "pos": [40, 40], "size": [410, 210], "flags": {}, "order": 0, "mode": 0, "inputs": [], "outputs": [{"name": "server", "type": "QWEN_TTS_SERVER", "links": [1, 2, 3], "slot_index": 0}, {"name": "status", "type": "STRING", "links": null, "slot_index": 1}], "properties": {"Node name for S&R": "QwenTTSServer"}, "widgets_values": ["http://127.0.0.1:8020", 900, "Backend Default (tts-1-ru)", "wav"]},
+    {"id": 2, "type": "QwenTTSSynthesize", "pos": [520, 20], "size": [520, 680], "flags": {}, "order": 1, "mode": 0, "inputs": [{"name": "server", "type": "QWEN_TTS_SERVER", "link": 1}], "outputs": [{"name": "audio", "type": "AUDIO", "links": [4], "slot_index": 0}, {"name": "temporary_path", "type": "STRING", "links": null, "slot_index": 1}, {"name": "metadata", "type": "STRING", "links": null, "slot_index": 2}, {"name": "duration", "type": "FLOAT", "links": null, "slot_index": 3}], "properties": {"Node name for S&R": "QwenTTSSynthesize"}, "widgets_values": ["Быстрый вариант русской речи.", "clone:QwenDemoRussianNeutral", 1.0, "0.6B Fast (tts-1-ru-fast)", "wav", "all", "", "Default", "Off", ""]},
+    {"id": 3, "type": "QwenTTSSynthesize", "pos": [520, 760], "size": [520, 680], "flags": {}, "order": 2, "mode": 0, "inputs": [{"name": "server", "type": "QWEN_TTS_SERVER", "link": 2}], "outputs": [{"name": "audio", "type": "AUDIO", "links": [5], "slot_index": 0}, {"name": "temporary_path", "type": "STRING", "links": null, "slot_index": 1}, {"name": "metadata", "type": "STRING", "links": null, "slot_index": 2}, {"name": "duration", "type": "FLOAT", "links": null, "slot_index": 3}], "properties": {"Node name for S&R": "QwenTTSSynthesize"}, "widgets_values": ["Качественный вариант русской речи.", "clone:QwenDemoRussianNeutral", 1.0, "1.7B Quality (tts-1-ru-quality)", "wav", "all", "", "Default", "Off", ""]},
+    {"id": 4, "type": "QwenTTSSynthesize", "pos": [520, 1500], "size": [520, 720], "flags": {}, "order": 3, "mode": 0, "inputs": [{"name": "server", "type": "QWEN_TTS_SERVER", "link": 3}], "outputs": [{"name": "audio", "type": "AUDIO", "links": [6], "slot_index": 0}, {"name": "temporary_path", "type": "STRING", "links": null, "slot_index": 1}, {"name": "metadata", "type": "STRING", "links": null, "slot_index": 2}, {"name": "duration", "type": "FLOAT", "links": null, "slot_index": 3}], "properties": {"Node name for S&R": "QwenTTSSynthesize"}, "widgets_values": ["Qwen и ComfyUI готовы на 25% к 12:30.", "clone:QwenDemoRussianNeutral", 1.0, "Backend Default (tts-1-ru)", "wav", "all", "", "Stable Russian", "Full Russian", "Qwen = куэн\nComfyUI = комфи ю ай"]},
+    {"id": 5, "type": "PreviewAudio", "pos": [1140, 80], "size": [320, 110], "flags": {}, "order": 4, "mode": 0, "inputs": [{"name": "audio", "type": "AUDIO", "link": 4}], "outputs": [], "properties": {"Node name for S&R": "PreviewAudio"}, "widgets_values": []},
+    {"id": 6, "type": "PreviewAudio", "pos": [1140, 820], "size": [320, 110], "flags": {}, "order": 5, "mode": 0, "inputs": [{"name": "audio", "type": "AUDIO", "link": 5}], "outputs": [], "properties": {"Node name for S&R": "PreviewAudio"}, "widgets_values": []},
+    {"id": 7, "type": "PreviewAudio", "pos": [1140, 1560], "size": [320, 110], "flags": {}, "order": 6, "mode": 0, "inputs": [{"name": "audio", "type": "AUDIO", "link": 6}], "outputs": [], "properties": {"Node name for S&R": "PreviewAudio"}, "widgets_values": []}
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "QWEN_TTS_SERVER"],
+    [2, 1, 0, 3, 0, "QWEN_TTS_SERVER"],
+    [3, 1, 0, 4, 0, "QWEN_TTS_SERVER"],
+    [4, 2, 0, 5, 0, "AUDIO"],
+    [5, 3, 0, 6, 0, "AUDIO"],
+    [6, 4, 0, 7, 0, "AUDIO"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
