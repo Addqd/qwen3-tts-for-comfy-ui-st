@@ -56,16 +56,20 @@ generation:
       subtalker_top_p: 0.90
 
 request_defaults:
-  generation_preset: default
-  russian_normalization: "off"
+  # OpenAI-compatible clients that cannot send the optional custom fields
+  # (including SillyTavern) receive the stable Russian path. Explicit request
+  # values such as ComfyUI's Default/Off controls always take precedence.
+  generation_preset: stable_russian
+  russian_normalization: full
 
 normalization:
   # Only explicit lexical replacements are made; there is no unsafe blanket
   # replacement of every Russian letter e with yo.
   yo_dictionary:
-    "РµС‰Рµ": "РµС‰С‘"
-    "РІСЃРµ": "РІСЃС‘"
-    "РµРµ": "РµС‘"
+    "еще": "ещё"
+    "ее": "её"
+    "елка": "ёлка"
+    "ежик": "ёжик"
 
 pronunciation:
   # Global deterministic replacements. Request overrides win on key clashes.

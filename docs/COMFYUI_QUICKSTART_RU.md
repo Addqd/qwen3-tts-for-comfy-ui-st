@@ -18,16 +18,16 @@
 
 Откройте `integrations\comfyui\example_workflows\text_to_speech_ru.json` для одного готового профиля или `text_to_speech_models_ru.json` для сравнения режимов.
 
-![Готовый workflow существующего voice profile](images/comfyui/comfyui-existing-voice-profile.png)
+![Готовый workflow существующего voice profile](images/comfyui/comfyui-workflow-overview.png)
 
 В **Qwen TTS Synthesize** доступны:
 
-1. **Model**: `Backend Default`, `0.6B Fast` или `1.7B Quality`.
+1. **Model**: `Inherit Server model` (default), `Backend Default`, `0.6B Fast` или `1.7B Quality`. Inherit использует выбор **Qwen TTS Server**; explicit значение в Synthesize переопределяет его.
 2. **Generation preset**: `Default` или `Stable Russian`.
 3. **Russian normalization**: `Off`, `Basic Russian` или `Full Russian`.
 4. **Pronunciation overrides**: по одной замене на строку, например `Qwen = куэн`.
 
-![Полная Qwen TTS Synthesize node](images/comfyui/comfyui-tts-synthesize.png)
+![Полная Qwen TTS Synthesize node](images/comfyui/comfyui-quality-17b.png)
 
 Для быстрого варианта выберите `0.6B Fast`:
 
@@ -44,5 +44,7 @@
 После успешного Queue в **Preview Audio** появляется проигрыватель:
 
 ![Успешно выполненный workflow](images/comfyui/comfyui-workflow-completed.png)
+
+В репозитории сохранены пять уникальных реальных кадров интерфейса. Один кадр намеренно переиспользуется, если одновременно показывает несколько требуемых состояний; искусственно изменённых копий для получения другого SHA нет.
 
 Подробные значения параметров и поведение backend: [MODELS_AND_RUSSIAN_TTS_RU.md](MODELS_AND_RUSSIAN_TTS_RU.md).

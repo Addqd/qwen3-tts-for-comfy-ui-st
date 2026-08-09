@@ -30,27 +30,31 @@ def main() -> int:
         model_id=resolved.hf_id,
         runtime=resolved.spec.runtime,
     )
-    preset = str(job.get("generation_preset", "default"))
-    generate = generation_kwargs(config, preset, resolved.spec)
-    waveform, sample_rate, metrics = worker.synthesize(
-        job["text"],
-        profile,
-        job.get("language", "Russian"),
-        generation_kwargs=generate,
-    )
-    metrics.update(
-        {
-            "requested_model": resolved.requested_alias,
-            "resolved_model": resolved.canonical,
-            "resolved_hf_id": resolved.hf_id,
-            "generation_preset": preset,
-        }
-    )
-    sf.write(job["output"], waveform, sample_rate, subtype="PCM_16")
-    result_path = Path(job["result"])
-    result_path.write_text(json.dumps({"sample_rate": sample_rate, "metrics": metrics}), encoding="utf-8")
-    worker.unload()
-    return 0
+    try:
+        preset = str(job.get("generation_preset", "default"))
+        generate = generation_kwargs(config, preset, resolved.spec)
+        # QwenWorker.synthesize() owns lazy load; an extra load() here would
+        # duplicate lifecycle logic without improving safety.
+        waveform, sample_rate, metrics = worker.synthesize(
+            job["text"],
+            profile,
+            "Russian",
+            generation_kwargs=generate,
+        )
+        metrics.update(
+            {
+                "requested_model": resolved.requested_alias,
+                "resolved_model": resolved.canonical,
+                "resolved_hf_id": resolved.hf_id,
+                "generation_preset": preset,
+            }
+        )
+        sf.write(job["output"], waveform, sample_rate, subtype="PCM_16")
+        result_path = Path(job["result"])
+        result_path.write_text(json.dumps({"sample_rate": sample_rate, "metrics": metrics}), encoding="utf-8")
+        return 0
+    finally:
+        worker.unload()
 
 
 if __name__ == "__main__":

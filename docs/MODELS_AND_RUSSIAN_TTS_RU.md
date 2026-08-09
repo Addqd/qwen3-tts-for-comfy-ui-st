@@ -45,10 +45,10 @@ Backend поддерживает две официальные Base-модели
 - `tts-1-ru-quality` — 1.7B;
 - `tts-1-ru` — backend default.
 
-Дополнительные поля нормализации provider сейчас не отправляет. Для всех стандартных клиентов их можно задать локально через `request_defaults` в `config/config.local.yaml`; client-specific поведение по User-Agent намеренно не используется.
+Дополнительные поля нормализации provider сейчас не отправляет. Поэтому общие `request_defaults` равны `stable_russian + full`, и обычный SillyTavern/legacy OpenAI-compatible request получает рекомендуемый русский путь без client detection или User-Agent hacks. ComfyUI и другие explicit API clients могут передать `default`/`off`; request-level значение всегда имеет приоритет.
 
 ## Диагностика
 
-`GET /v1/models` показывает публичные алиасы и разрешённые HF ID. `GET /health` показывает активную модель, режим, device/dtype/attention и время загрузки. Последний запрос виден в `GET /metrics`, включая выбранный preset, режим нормализации и количество словарных замен.
+`GET /v1/models` показывает публичные алиасы и разрешённые HF ID. `GET /health` дополнительно показывает `default_model`, `available_models`, активную модель, режим, device/dtype/attention, время загрузки и configured/effective concurrency. Последний запрос виден в `GET /metrics`, включая выбранный preset, режим нормализации и количество словарных замен.
 
 Официальные источники: [Qwen3-TTS 1.7B Base model card](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) и [Qwen3-TTS inference API](https://github.com/QwenLM/Qwen3-TTS/blob/main/qwen_tts/inference/qwen3_tts_model.py).

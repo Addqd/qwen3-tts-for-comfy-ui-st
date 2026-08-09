@@ -143,6 +143,7 @@ def test_synthesize_exposes_model_quality_and_russian_controls(monkeypatch):
     nodes = load_nodes()
     inputs = nodes.QwenTTSSynthesizeNode.INPUT_TYPES()
     assert inputs["required"]["model"][0] == [
+        "Inherit Server model",
         "Backend Default (tts-1-ru)",
         "0.6B Fast (tts-1-ru-fast)",
         "1.7B Quality (tts-1-ru-quality)",
@@ -153,6 +154,7 @@ def test_synthesize_exposes_model_quality_and_russian_controls(monkeypatch):
         "Basic Russian",
         "Full Russian",
     ]
+    assert inputs["required"]["model"][1]["default"] == "Inherit Server model"
 
     captured = {}
 
@@ -191,6 +193,44 @@ def test_synthesize_exposes_model_quality_and_russian_controls(monkeypatch):
     metadata = json.loads(result[2])
     assert metadata["resolved_model"] == "qwen3-tts-1.7b"
     assert metadata["pronunciation_override_count"] == 1
+
+
+def test_synthesize_inherits_quality_server_model_and_keeps_legacy_values(monkeypatch):
+    nodes = load_nodes()
+    captured = {}
+
+    class FakeWaveform:
+        shape = (1, 1, 2400)
+
+    def response(_server, _path, payload=None):
+        captured.update(payload)
+        return b"RIFF", {"X-Audio-Duration": "0.1"}
+
+    monkeypatch.setattr(nodes, "_json_request", response)
+    monkeypatch.setattr(
+        nodes,
+        "_load_comfy_audio",
+        lambda _path: {"waveform": FakeWaveform(), "sample_rate": 24000},
+    )
+    nodes.QwenTTSSynthesizeNode().synthesize(
+        {"endpoint": "http://127.0.0.1:8020", "timeout": 10, "model": "tts-1-ru-quality"},
+        "Тест.",
+        "clone:QwenDemoRussianNeutral",
+        1.0,
+        "Inherit Server model",
+        "wav",
+        "all",
+    )
+    assert captured["model"] == "tts-1-ru-quality"
+    legacy_values = {
+        "tts-1-ru": "tts-1-ru",
+        "tts-1-ru-fast": "tts-1-ru-fast",
+        "tts-1-ru-quality": "tts-1-ru-quality",
+        "Backend Default (tts-1-ru)": "tts-1-ru",
+        "0.6B Fast (tts-1-ru-fast)": "tts-1-ru-fast",
+        "1.7B Quality (tts-1-ru-quality)": "tts-1-ru-quality",
+    }
+    assert {value: nodes._model_alias(value, {}) for value in legacy_values} == legacy_values
 
 
 def test_comfy_clone_conversion_preserves_input_sample_rate():

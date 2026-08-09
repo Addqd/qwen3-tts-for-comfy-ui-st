@@ -6,6 +6,6 @@ models:
       runtime:
         dtype: float32
         attention: sdpa
-  max_new_tokens: 64
+        max_new_tokens: 64
 queue:
   generation_timeout_seconds: 120

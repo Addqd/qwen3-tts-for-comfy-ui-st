@@ -71,3 +71,28 @@ def test_service_shutdown_unloads_worker(tmp_path, monkeypatch):
     monkeypatch.setattr(service.worker, "unload", lambda: called.append(True))
     service.shutdown()
     assert called == [True]
+
+
+def test_single_model_manager_clamps_full_request_concurrency(tmp_path):
+    config = config_with(tmp_path)
+    config.data["queue"]["max_concurrent"] = 3
+    service = TTSService(config)
+    health = service.health()
+    assert service.configured_max_concurrent == 3
+    assert service.effective_max_concurrent == 1
+    assert health["queue_max_concurrent_configured"] == 3
+    assert health["queue_max_concurrent_effective"] == 1
+
+
+@pytest.mark.asyncio
+async def test_second_request_cannot_enter_single_manager_lifecycle(tmp_path):
+    config = config_with(tmp_path)
+    config.data["queue"]["max_concurrent"] = 2
+    config.data["queue"]["wait_timeout_seconds"] = 0.01
+    service = TTSService(config)
+    await service._acquire()
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await service._acquire()
+    finally:
+        service.semaphore.release()

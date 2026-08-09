@@ -36,7 +36,12 @@ class TTSService:
         # Existing tests and local instrumentation access service.worker directly.
         # Production paths use the manager and remain lazy.
         self.worker = self.manager.worker_for_compatibility() if backend == "mock" else None
-        self.semaphore = asyncio.Semaphore(int(config.get("queue.max_concurrent", 1)))
+        self.configured_max_concurrent = max(1, int(config.get("queue.max_concurrent", 1)))
+        # ModelManager owns one activation and one resident worker. Serializing
+        # the full request lifecycle prevents another request from switching the
+        # model between prepare() and the final synthesize_prepared() call.
+        self.effective_max_concurrent = 1
+        self.semaphore = asyncio.Semaphore(self.effective_max_concurrent)
         self.waiting = 0
         self.completed = 0
         self.failed = 0
@@ -51,6 +56,8 @@ class TTSService:
         return {
             "status": "ok",
             "model": metadata["requested_model"],
+            "default_model": "tts-1-ru",
+            "available_models": self.registry.public_aliases(),
             "active_model": metadata["resolved_model"] if self.manager.active_activation else None,
             "resolved_hf_id": metadata["resolved_hf_id"],
             "backend": self.config.get("model.backend"),
@@ -63,6 +70,8 @@ class TTSService:
             "model_load_seconds": metadata["model_load_seconds"],
             "voice_count": len(unique_voices),
             "queue_waiting": self.waiting,
+            "queue_max_concurrent_configured": self.configured_max_concurrent,
+            "queue_max_concurrent_effective": self.effective_max_concurrent,
             "resources": current,
             "uptime_seconds": round(time.time() - self.started_at, 1),
         }

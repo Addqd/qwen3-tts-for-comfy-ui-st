@@ -1,5 +1,13 @@
 # Журнал выполнения
 
+## 2026-08-09 — follow-up по review PR #6
+
+- Работа продолжена от точного старого HEAD PR #6 `832185f360e566ebbfcb8d5b959d14e16d0fb9e4` в существующей ветке `feature/multi-model-russian-quality-20260809`; новый PR не создавался.
+- Проверены и адресованы семь открытых замечаний CodeRabbit: benchmark limits, безопасный словарь `е/ё`, женский род числительных, наследование модели ComfyUI, сериализация model lifecycle, гарантированный cleanup worker и буквальный язык `Russian`.
+- Дополнительно восстановлена совместимость старых `config.local.yaml`, уточнены SillyTavern defaults `stable_russian + full`, расширен `/health`, актуализированы русские гайды и удалены четыре побайтно дублирующихся screenshot-файла без подделки изображений.
+- Реальный CPU smoke при занятой внешними процессами GPU прошёл в одном backend-процессе: `0.6B Fast → 1.7B Quality → 0.6B Fast`, без silent fallback и повторного скачивания моделей. Получены валидные mono WAV 24 kHz: 3,12 с (peak 0,408081), 3,04 с (peak 0,504181) и 2,64 с (peak 0,552490); после проверки backend остановлен своим `stop.ps1`, порт 8020 освобождён.
+- Полная автоматическая проверка перед публикацией follow-up: `96 passed`; `compileall`, `pip check`, YAML/JSON parsing, ComfyUI install mapping и `git diff --check` прошли.
+
 ## 2026-08-09 — выбор 0.6B/1.7B, русский quality pipeline и ComfyUI screenshots
 
 - Работа продолжена от `origin/main` на ветке `feature/multi-model-russian-quality-20260809`; существующие голоса, SillyTavern и внешние процессы не изменялись.

@@ -116,6 +116,8 @@ Endpoints: `GET /health`, `/v1/models`, `/v1/voices`, `/metrics`; `POST /v1/audi
 
 В одном backend-процессе находится не более одной модели: при смене алиаса предыдущая модель выгружается до загрузки следующей. Доступны request-level `generation_preset=stable_russian`, `russian_normalization=off|basic|full` и `pronunciation_overrides`. Подробности и реальные ComfyUI screenshots: [docs/MODELS_AND_RUSSIAN_TTS_RU.md](docs/MODELS_AND_RUSSIAN_TTS_RU.md) и [docs/COMFYUI_QUICKSTART_RU.md](docs/COMFYUI_QUICKSTART_RU.md).
 
+Backend defaults — `stable_russian + full`: это даёт рекомендуемый русский путь SillyTavern и другим legacy OpenAI-compatible запросам без нестандартных полей. Явно переданные `default` и `off` всегда имеют приоритет. Из-за единственного model manager полный synthesis lifecycle сериализован даже при большем `queue.max_concurrent`; фактические значения видны в `/health`.
+
 ## Обновление и резервная копия
 
 Перед обновлением сохраните `config/config.local.yaml` и весь `voice_library/profiles`. Не удаляйте `reference.wav`: точная транскрипция связана именно с ним. После обновления снова выполните install, тесты и один контрольный WAV. `model_cache`, `.venv`, логи и runtime можно восстановить, голоса — нет.

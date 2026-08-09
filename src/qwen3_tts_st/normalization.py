@@ -40,7 +40,7 @@ def _plural(value: int, forms: tuple[str, str, str]) -> str:
     return forms[2]
 
 
-def integer_to_words(value: int) -> str:
+def integer_to_words(value: int, feminine: bool = False) -> str:
     if abs(value) > 999_999:
         return str(value)
     if value == 0:
@@ -53,7 +53,7 @@ def integer_to_words(value: int) -> str:
         parts.append(_under_thousand(thousands, feminine=True))
         parts.append(_plural(thousands, ("тысяча", "тысячи", "тысяч")))
     if rest:
-        parts.append(_under_thousand(rest))
+        parts.append(_under_thousand(rest, feminine=feminine))
     return prefix + " ".join(parts)
 
 
@@ -91,7 +91,7 @@ def _normalize_full(text: str) -> str:
     def time_value(match: re.Match[str]) -> str:
         hours = int(match.group(1))
         minutes = int(match.group(2))
-        return f"{integer_to_words(hours)} {_plural(hours, ('час', 'часа', 'часов'))} {integer_to_words(minutes)} {_plural(minutes, ('минута', 'минуты', 'минут'))}"
+        return f"{integer_to_words(hours)} {_plural(hours, ('час', 'часа', 'часов'))} {integer_to_words(minutes, feminine=True)} {_plural(minutes, ('минута', 'минуты', 'минут'))}"
 
     def percent_value(match: re.Match[str]) -> str:
         number = int(match.group(1))
@@ -104,7 +104,10 @@ def _normalize_full(text: str) -> str:
         denominator = ("десятая", "десятых") if len(fraction_text) == 1 else ("сотая", "сотых")
         whole_form = _plural(abs(whole), ("целая", "целых", "целых"))
         fraction_form = denominator[0] if fraction % 10 == 1 and fraction % 100 != 11 else denominator[1]
-        return f"{integer_to_words(whole)} {whole_form} {integer_to_words(fraction)} {fraction_form}"
+        return (
+            f"{integer_to_words(whole, feminine=True)} {whole_form} "
+            f"{integer_to_words(fraction, feminine=True)} {fraction_form}"
+        )
 
     value = re.sub(r"(?<!\d)([0-2]?\d):([0-5]\d)(?!\d)", time_value, text)
     value = re.sub(r"(?<![\w.,])(-?\d{1,6})\s*%(?!\w)", percent_value, value)

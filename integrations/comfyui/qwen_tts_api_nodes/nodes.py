@@ -16,16 +16,21 @@ import numpy as np
 
 
 CATEGORY = "Qwen TTS API"
-VERSION = "0.4.0"
-MODEL_OPTIONS = (
+VERSION = "0.4.1"
+INHERIT_SERVER_MODEL = "Inherit Server model"
+SERVER_MODEL_OPTIONS = (
     "Backend Default (tts-1-ru)",
     "0.6B Fast (tts-1-ru-fast)",
     "1.7B Quality (tts-1-ru-quality)",
 )
+SYNTH_MODEL_OPTIONS = (INHERIT_SERVER_MODEL, *SERVER_MODEL_OPTIONS)
+# Compatibility for callers that imported the former public constant.
+MODEL_OPTIONS = SERVER_MODEL_OPTIONS
 MODEL_ALIASES = {
-    MODEL_OPTIONS[0]: "tts-1-ru",
-    MODEL_OPTIONS[1]: "tts-1-ru-fast",
-    MODEL_OPTIONS[2]: "tts-1-ru-quality",
+    INHERIT_SERVER_MODEL: "",
+    SERVER_MODEL_OPTIONS[0]: "tts-1-ru",
+    SERVER_MODEL_OPTIONS[1]: "tts-1-ru-fast",
+    SERVER_MODEL_OPTIONS[2]: "tts-1-ru-quality",
     "tts-1-ru": "tts-1-ru",
     "tts-1-ru-fast": "tts-1-ru-fast",
     "tts-1-ru-quality": "tts-1-ru-quality",
@@ -156,8 +161,9 @@ def _endpoint(value: str) -> str:
 
 
 def _model_alias(value: str | None, server: dict) -> str:
-    selected = (value or server.get("model") or "tts-1-ru").strip()
-    return MODEL_ALIASES.get(selected, selected)
+    raw = (value or "").strip()
+    selected = MODEL_ALIASES.get(raw, raw)
+    return (selected or str(server.get("model") or "tts-1-ru")).strip()
 
 
 def _generation_preset(value: str) -> str:
@@ -258,7 +264,7 @@ class QwenTTSServerNode:
         return {"required": {
             "endpoint": ("STRING", {"default": "http://127.0.0.1:8020"}),
             "timeout": ("INT", {"default": 900, "min": 1, "max": 3600}),
-            "model": (list(MODEL_OPTIONS), {"default": MODEL_OPTIONS[0]}),
+            "model": (list(SERVER_MODEL_OPTIONS), {"default": SERVER_MODEL_OPTIONS[0]}),
             "response_format": (["wav", "mp3", "flac", "opus", "aac"], {"default": "wav"}),
         }}
 
@@ -286,7 +292,7 @@ class QwenTTSSynthesizeNode:
                 "text": ("STRING", {"multiline": True, "default": "Здравствуйте! Это проверка Qwen3-TTS."}),
                 "voice": ("STRING", {"default": "clone:QwenDemoRussianNeutral"}),
                 "speed": ("FLOAT", {"default": 1.0, "min": 0.25, "max": 4.0, "step": 0.05}),
-                "model": (list(MODEL_OPTIONS), {"default": MODEL_OPTIONS[0]}),
+                "model": (list(SYNTH_MODEL_OPTIONS), {"default": INHERIT_SERVER_MODEL}),
                 "response_format": (["wav", "mp3", "flac", "opus", "aac"], {"default": "wav"}),
                 "preprocessing_mode": (["all", "direct_speech"], {"default": "all"}),
             },
