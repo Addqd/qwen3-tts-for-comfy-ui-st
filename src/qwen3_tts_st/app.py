@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .config import AppConfig, load_config
 from .emotion import VoiceStyle
+from .normalization import parse_pronunciation_overrides
 from .service import TTSService
 
 
@@ -26,6 +27,15 @@ class SpeechRequest(BaseModel):
     response_format: Literal["wav", "mp3", "flac", "opus", "aac"] = "wav"
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     preprocessing_mode: Literal["all", "direct_speech"] | None = None
+    generation_preset: Literal["default", "stable_russian"] | None = None
+    russian_normalization: Literal["off", "basic", "full"] | None = None
+    pronunciation_overrides: dict[str, str] | str | None = None
+
+    @field_validator("pronunciation_overrides")
+    @classmethod
+    def validate_pronunciation_overrides(cls, value):
+        parse_pronunciation_overrides(value)
+        return value
 
 
 class CloneRequest(BaseModel):
@@ -51,7 +61,7 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
 
     app = FastAPI(
         title="Qwen3-TTS ST",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
         default_response_class=UTF8JSONResponse,
     )
@@ -66,7 +76,7 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
 
     @app.get("/v1/models")
     async def models():
-        return {"object": "list", "data": [{"id": "tts-1-ru", "object": "model", "owned_by": "local-qwen"}, {"id": str(active_config.get("model.id")), "object": "model", "owned_by": "Qwen"}]}
+        return {"object": "list", "data": app.state.tts.registry.public_models()}
 
     @app.get("/v1/voices")
     async def voices():
@@ -86,7 +96,14 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
         return Response(
             content=payload,
             media_type=media_type,
-            headers={"X-Audio-Duration": f"{metadata['duration_seconds']:.3f}", "X-TTS-Segments": str(metadata["segments"])},
+            headers={
+                "X-Audio-Duration": f"{metadata['duration_seconds']:.3f}",
+                "X-TTS-Segments": str(metadata["segments"]),
+                "X-TTS-Requested-Model": str(metadata["requested_model"]),
+                "X-TTS-Resolved-Model": str(metadata["resolved_model"]),
+                "X-TTS-Generation-Preset": str(metadata["generation_preset"]),
+                "X-TTS-Russian-Normalization": str(metadata["russian_normalization"]),
+            },
         )
 
     @app.post("/v1/audio/voice-clone")

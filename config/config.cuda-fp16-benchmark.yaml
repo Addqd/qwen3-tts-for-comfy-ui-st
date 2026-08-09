@@ -1,6 +1,9 @@
 resources:
   mode: cuda
-model:
-  dtype: float16
-  attention: sdpa
-  max_new_tokens: 256
+models:
+  available:
+    qwen3-tts-0.6b:
+      runtime:
+        dtype: float16
+        attention: sdpa
+        max_new_tokens: 256

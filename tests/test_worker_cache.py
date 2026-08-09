@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from qwen3_tts_st import worker as worker_module
 from qwen3_tts_st.voices import VoiceProfile
 from qwen3_tts_st.worker import QwenWorker
 
@@ -66,3 +67,21 @@ def test_prompt_cache_tracks_audio_text_and_clone_mode(tmp_path):
     assert len(worker.model.calls) == 4
     assert worker._prompt(profile) == fourth
     assert len(worker.model.calls) == 4
+
+
+def test_cpu_interop_threads_are_configured_only_once(monkeypatch):
+    calls = []
+
+    class FakeTorch:
+        @staticmethod
+        def set_num_threads(value):
+            calls.append(("threads", value))
+
+        @staticmethod
+        def set_num_interop_threads(value):
+            calls.append(("interop", value))
+
+    monkeypatch.setattr(worker_module, "_INTEROP_THREADS_CONFIGURED", False)
+    worker_module._configure_cpu_threads(FakeTorch, 6)
+    worker_module._configure_cpu_threads(FakeTorch, 4)
+    assert calls == [("threads", 6), ("interop", 2), ("threads", 4)]

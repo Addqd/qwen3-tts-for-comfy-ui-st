@@ -108,6 +108,14 @@ Endpoints: `GET /health`, `/v1/models`, `/v1/voices`, `/metrics`; `POST /v1/audi
 
 Результаты и команды: [docs/PERFORMANCE_RU.md](docs/PERFORMANCE_RU.md). Диагностика: `.\scripts\diagnose.ps1` и [docs/TROUBLESHOOTING_RU.md](docs/TROUBLESHOOTING_RU.md).
 
+## Модели и русский TTS
+
+- `tts-1-ru` — совместимый backend default;
+- `tts-1-ru-fast` — Qwen3-TTS Base 0.6B;
+- `tts-1-ru-quality` — Qwen3-TTS Base 1.7B.
+
+В одном backend-процессе находится не более одной модели: при смене алиаса предыдущая модель выгружается до загрузки следующей. Доступны request-level `generation_preset=stable_russian`, `russian_normalization=off|basic|full` и `pronunciation_overrides`. Подробности и реальные ComfyUI screenshots: [docs/MODELS_AND_RUSSIAN_TTS_RU.md](docs/MODELS_AND_RUSSIAN_TTS_RU.md) и [docs/COMFYUI_QUICKSTART_RU.md](docs/COMFYUI_QUICKSTART_RU.md).
+
 ## Обновление и резервная копия
 
 Перед обновлением сохраните `config/config.local.yaml` и весь `voice_library/profiles`. Не удаляйте `reference.wav`: точная транскрипция связана именно с ним. После обновления снова выполните install, тесты и один контрольный WAV. `model_cache`, `.venv`, логи и runtime можно восстановить, голоса — нет.

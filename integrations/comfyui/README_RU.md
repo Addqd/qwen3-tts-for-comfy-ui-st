@@ -1,6 +1,6 @@
 # Qwen TTS API nodes для ComfyUI
 
-Версия нод `0.3.0`. Это лёгкие localhost HTTP-клиенты для отдельного backend `http://127.0.0.1:8020`. В пакет не входят `torch`, `transformers`, `qwen_tts` или CUDA-библиотеки; модель и voice library остаются в backend-процессе.
+Версия нод `0.4.0`. Это лёгкие localhost HTTP-клиенты для отдельного backend `http://127.0.0.1:8020`. В пакет не входят `torch`, `transformers`, `qwen_tts` или CUDA-библиотеки; модель и voice library остаются в backend-процессе.
 
 ## Ноды
 
@@ -28,6 +28,7 @@ Workflow-примеры:
 - `backend_health_and_voices.json`;
 - `emotion_script_preview.json`;
 - `text_to_speech_ru.json`;
+- `text_to_speech_models_ru.json` — 0.6B Fast, 1.7B Quality и Stable/Full Russian;
 - `voice_clone_and_synthesize_ru.json` — не запускать без разрешённого WAV и точной транскрипции;
 - `voice_profile_from_wav_ru.json` — регистрация профиля и контрольный AUDIO;
 - `emotion_router_test_ru.json` — preview segments/profiles и объединённый AUDIO;

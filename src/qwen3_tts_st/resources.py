@@ -69,13 +69,18 @@ def snapshot(device: int = 0) -> ResourceSnapshot:
     return ResourceSnapshot(**values)
 
 
-def choose_mode(config: Any) -> tuple[str, str, ResourceSnapshot]:
-    requested = str(config.get("resources.mode", "auto")).lower()
+def choose_mode(config: Any, model_runtime: dict[str, Any] | None = None) -> tuple[str, str, ResourceSnapshot]:
+    runtime = model_runtime or {}
+    configured_mode = str(runtime.get("mode", "inherit")).lower()
+    requested = str(config.get("resources.mode", "auto")).lower() if configured_mode == "inherit" else configured_mode
+    if requested not in {"auto", "cpu", "cuda", "cuda_on_demand"}:
+        raise ValueError(f"неподдерживаемый resource mode: {requested}")
     current = snapshot(int(config.get("resources.gpu.device", 0)))
     if requested != "auto":
-        return requested, f"режим явно задан: {requested}", current
-    min_free = int(config.get("resources.gpu.minimum_free_vram_mb", 2500))
-    safety = int(config.get("resources.gpu.safety_reserve_mb", 750))
+        source = "model runtime" if configured_mode != "inherit" else "resources.mode"
+        return requested, f"режим явно задан через {source}: {requested}", current
+    min_free = int(runtime.get("minimum_free_vram_mb", config.get("resources.gpu.minimum_free_vram_mb", 2500)))
+    safety = int(runtime.get("safety_reserve_mb", config.get("resources.gpu.safety_reserve_mb", 750)))
     gpu_enabled = bool(config.get("resources.gpu.enabled", True))
     ram_reserve = int(config.get("resources.ram.safety_reserve_mb", 4096))
     if not gpu_enabled or current.gpu_free_vram_mb is None:
@@ -85,7 +90,7 @@ def choose_mode(config: Any) -> tuple[str, str, ResourceSnapshot]:
         return "cpu", f"свободно {current.gpu_free_vram_mb} MB VRAM, требуется безопасно не менее {required} MB", current
     if current.ram_available_mb < ram_reserve:
         return "cuda_on_demand", f"RAM ниже резерва {ram_reserve} MB; выбран изолированный CUDA on demand", current
-    if (current.gpu_process_count or 0) > 0 and bool(config.get("resources.gpu.reject_shared_memory_pressure", True)):
+    reject_pressure = bool(runtime.get("reject_shared_memory_pressure", config.get("resources.gpu.reject_shared_memory_pressure", True)))
+    if (current.gpu_process_count or 0) > 0 and reject_pressure:
         return "cuda_on_demand", "обнаружены GPU-процессы внешней нагрузки; выбран CUDA on demand", current
     return "cuda", f"доступно {current.gpu_free_vram_mb} MB VRAM; выбран постоянный CUDA worker", current
-

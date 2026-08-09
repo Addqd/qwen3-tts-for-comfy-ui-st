@@ -134,3 +134,24 @@ Manager 4.2.2 установлен официальной командой из 
 - **Manager предупреждает о `matrix-nio`**: это необязательная matrix-sharing функция; для Qwen-нód пакет не нужен.
 
 Проверка отсутствия второй модели: в `object_info` наши ноды импортируются за 0,0 с, `qwen_tts` отсутствует в embedded Python, а после on-demand synthesis `/health` снова показывает `model_loaded=false` и VRAM возвращается к базовому уровню ComfyUI.
+
+## Как выбрать 0.6B / 1.7B и настроить русский TTS в ComfyUI
+
+Project node package `0.4.0` показывает выбор модели непосредственно в **Qwen TTS Server** и **Qwen TTS Synthesize**. Тяжёлая модель по-прежнему находится только в backend.
+
+![Qwen TTS Server после обновления](images/comfyui/comfyui-tts-server.png)
+
+Откройте `text_to_speech_models_ru.json` для трёх готовых состояний или `text_to_speech_ru.json` для обычного синтеза существующего voice profile.
+
+![Общий вид соединённого workflow](images/comfyui/comfyui-workflow-overview.png)
+
+- **Backend Default** сохраняет старые workflow с `tts-1-ru` и следует `models.default`.
+- **0.6B Fast** отправляет `tts-1-ru-fast`.
+- **1.7B Quality** отправляет `tts-1-ru-quality`; backend не подменяет её на 0.6B при ошибке.
+- **Stable Russian** задаёт проверенный sampling preset.
+- **Full Russian** раскрывает ограниченные числа, проценты, время и дроби перед chunking.
+- **Pronunciation overrides** принимает строки `source = replacement`; request-level значение переопределяет глобальный словарь.
+
+![Заполненный Pronunciation overrides](images/comfyui/comfyui-pronunciation-overrides.png)
+
+Node metadata и HTTP response headers содержат requested/resolved model, preset и normalization mode. Полный API-контракт, ограничения RTX 2070 SUPER и настройка SillyTavern описаны в [MODELS_AND_RUSSIAN_TTS_RU.md](MODELS_AND_RUSSIAN_TTS_RU.md).
