@@ -10,7 +10,7 @@ from typing import Any
 
 import soundfile as sf
 
-from .audio import change_speed, encode, stitch
+from .audio import change_speed, encode, fade_edges, pad_edges, stitch
 from .emotion import parse_emotion_script_detailed
 from .generation import generation_kwargs
 from .model_manager import ModelActivation, ModelManager
@@ -20,8 +20,9 @@ from .normalization import (
     merge_pronunciation_dictionaries,
     normalize_russian_text,
 )
-from .preprocess import preprocess, split_long_text
+from .preprocess import preprocess, split_language_spans, split_long_text
 from .resources import snapshot
+from .runtime_settings import RuntimeSettingsStore
 from .voices import VoiceLibrary
 from .worker import MockWorker
 
@@ -30,6 +31,11 @@ class TTSService:
     def __init__(self, config: Any):
         self.config = config
         self.registry = ModelRegistry(config)
+        self.runtime_settings = RuntimeSettingsStore(
+            config,
+            self.registry.public_aliases(),
+            list((config.get("generation.presets", {}) or {}).keys()),
+        )
         self.manager = ModelManager(config, self.registry)
         self.library = VoiceLibrary(config.path("voices.library_dir", "voice_library"))
         backend = str(config.get("model.backend", "qwen")).lower()
@@ -51,12 +57,16 @@ class TTSService:
     def health(self) -> dict:
         current = snapshot(int(self.config.get("resources.gpu.device", 0))).to_dict()
         unique_voices = self.library.list()
-        activation = self.manager.active_activation or self.manager.preview_default()
+        runtime = self.runtime_settings.current()
+        effective_default = self.runtime_settings.resolve_model("tts-1-ru")
+        default_resolved = self.registry.resolve(effective_default)
+        activation = self.manager.active_activation or self.manager.preview(effective_default)
         metadata = activation.metadata()
         return {
             "status": "ok",
-            "model": metadata["requested_model"],
-            "default_model": "tts-1-ru",
+            "model": "tts-1-ru",
+            "default_model": runtime["active_model"],
+            "effective_default_model": default_resolved.canonical,
             "available_models": self.registry.public_aliases(),
             "active_model": metadata["resolved_model"] if self.manager.active_activation else None,
             "resolved_hf_id": metadata["resolved_hf_id"],
@@ -72,6 +82,7 @@ class TTSService:
             "queue_waiting": self.waiting,
             "queue_max_concurrent_configured": self.configured_max_concurrent,
             "queue_max_concurrent_effective": self.effective_max_concurrent,
+            "runtime_settings": runtime,
             "resources": current,
             "uptime_seconds": round(time.time() - self.started_at, 1),
         }
@@ -142,65 +153,89 @@ class TTSService:
             configured_fallback = str(self.config.get("voices.fallback_profile", "")) or None
             selected = self.library.resolve(request.voice, configured_fallback)
             base = self.library.resolve_family_neutral(selected, configured_fallback)
+            runtime = self.runtime_settings.current()
             requested_model = getattr(request, "model", None) or "tts-1-ru"
-            resolved = self.registry.resolve(requested_model)
+            effective_model = self.runtime_settings.resolve_model(requested_model)
+            resolved = self.registry.resolve(effective_model)
             generation_preset = (
                 getattr(request, "generation_preset", None)
-                or str(self.config.get("request_defaults.generation_preset", "default"))
+                or str(runtime["generation_preset"])
             )
             normalize_mode = (
                 getattr(request, "russian_normalization", None)
-                or str(self.config.get("request_defaults.russian_normalization", "off"))
+                or str(runtime["russian_normalization"])
             )
+            multilingual_mode = getattr(request, "multilingual_mode", None) or str(runtime["multilingual_mode"])
+            chunking_mode = getattr(request, "chunking_mode", None) or str(runtime["chunking_mode"])
+            leading_silence_ms = getattr(request, "leading_silence_ms", None)
+            if leading_silence_ms is None:
+                leading_silence_ms = int(runtime["leading_silence_ms"])
+            trailing_silence_ms = getattr(request, "trailing_silence_ms", None)
+            if trailing_silence_ms is None:
+                trailing_silence_ms = int(runtime["trailing_silence_ms"])
             generate = generation_kwargs(self.config, generation_preset, resolved.spec)
-            pronunciation = merge_pronunciation_dictionaries(
+            persistent_pronunciation = merge_pronunciation_dictionaries(
                 self.config.get("pronunciation.dictionary", {}),
+                runtime["pronunciation_defaults"],
+            )
+            pronunciation = merge_pronunciation_dictionaries(
+                persistent_pronunciation,
                 getattr(request, "pronunciation_overrides", None),
             )
             yo_dictionary = self.config.get("normalization.yo_dictionary", {}) or {}
             parts = []
             all_metrics = []
             selected_voices = []
+            generation_voices = []
+            languages = []
             pronunciation_replacements = 0
-            activation: ModelActivation = self.manager.prepare(requested_model)
+            activation: ModelActivation = self.manager.prepare(effective_model)
             max_chars = int(self.config.get("chunking.max_chars", 320))
             for segment in segments:
                 profile = self.library.find_style(base.character, segment.style, base)
-                normalized = normalize_russian_text(segment.text, normalize_mode, yo_dictionary)
-                pronounced, replacements = apply_pronunciation(normalized, pronunciation)
+                selected_voices.append(profile.voice_id)
+                pronounced, replacements = apply_pronunciation(segment.text, pronunciation)
                 pronunciation_replacements += replacements
-                for chunk in split_long_text(pronounced, max_chars):
-                    if activation.mode == "cuda_on_demand" and not isinstance(activation.worker, MockWorker):
-                        waveform, sample_rate, metrics = await self._on_demand(
-                            chunk,
-                            profile.voice_id,
-                            "Russian",
-                            requested_model,
-                            generation_preset,
-                        )
-                    else:
-                        waveform, sample_rate, metrics = await asyncio.wait_for(
-                            asyncio.to_thread(
-                                self.manager.synthesize_prepared,
-                                activation,
-                                chunk,
-                                profile,
-                                "Russian",
-                                generate,
-                            ),
-                            timeout=float(self.config.get("queue.generation_timeout_seconds", 900)),
-                        )
-                    metrics.update(activation.metadata())
-                    metrics["generation_preset"] = generation_preset
-                    parts.append((waveform, sample_rate))
-                    all_metrics.append(metrics)
-                    selected_voices.append(profile.voice_id)
+                for chunk in split_long_text(pronounced, max_chars, chunking_mode):
+                    for language_span in split_language_spans(chunk, multilingual_mode):
+                        span_text = language_span.text
+                        if language_span.language == "Russian":
+                            span_text = normalize_russian_text(span_text, normalize_mode, yo_dictionary)
+                        if activation.mode == "cuda_on_demand" and not isinstance(activation.worker, MockWorker):
+                            waveform, sample_rate, metrics = await self._on_demand(
+                                span_text,
+                                profile.voice_id,
+                                language_span.language,
+                                effective_model,
+                                generation_preset,
+                            )
+                        else:
+                            waveform, sample_rate, metrics = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    self.manager.synthesize_prepared,
+                                    activation,
+                                    span_text,
+                                    profile,
+                                    language_span.language,
+                                    generate,
+                                ),
+                                timeout=float(self.config.get("queue.generation_timeout_seconds", 900)),
+                            )
+                        metrics.update(activation.metadata())
+                        metrics["generation_preset"] = generation_preset
+                        metrics["language"] = language_span.language
+                        metrics["voice"] = profile.voice_id
+                        parts.append((waveform, sample_rate))
+                        all_metrics.append(metrics)
+                        generation_voices.append(profile.voice_id)
+                        languages.append(language_span.language)
             waveform, sample_rate = stitch(
                 parts,
-                pause_ms=int(self.config.get("pauses.segment_ms", 120)),
                 crossfade_ms=int(self.config.get("pauses.crossfade_ms", 8)),
             )
             waveform = change_speed(waveform, request.speed)
+            waveform = fade_edges(waveform, sample_rate, int(self.config.get("pauses.edge_fade_ms", 5)))
+            waveform = pad_edges(waveform, sample_rate, leading_silence_ms, trailing_silence_ms)
             payload, media_type = encode(waveform, sample_rate, request.response_format)
             duration = len(waveform) / sample_rate
             metadata = {
@@ -210,8 +245,10 @@ class TTSService:
                 "styles": [segment.style for segment in segments],
                 "segment_types": [segment.kind for segment in segments],
                 "voices": selected_voices,
+                "generation_voices": generation_voices,
                 "router_warnings": router_warnings,
                 "requested_model": requested_model,
+                "effective_model": effective_model,
                 "resolved_model": resolved.canonical,
                 "resolved_hf_id": resolved.hf_id,
                 "model_action": activation.action,
@@ -221,6 +258,11 @@ class TTSService:
                 "attention": activation.attention,
                 "generation_preset": generation_preset,
                 "russian_normalization": normalize_mode,
+                "multilingual_mode": multilingual_mode,
+                "chunking_mode": chunking_mode,
+                "languages": languages,
+                "leading_silence_ms": leading_silence_ms,
+                "trailing_silence_ms": trailing_silence_ms,
                 "pronunciation_replacements": pronunciation_replacements,
                 "generation": all_metrics,
             }

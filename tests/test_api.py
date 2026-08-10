@@ -19,6 +19,7 @@ def make_test_config(tmp_path: Path) -> AppConfig:
     data["resources"]["mode"] = "cpu"
     data["voices"]["library_dir"] = str(tmp_path / "voices")
     data["voices"]["fallback_profile"] = "clone:TestNeutral"
+    data["runtime"]["settings_file"] = str(tmp_path / "runtime-settings.json")
     folder = tmp_path / "voices" / "profiles" / "test" / "neutral"
     folder.mkdir(parents=True)
     sr = 24000
@@ -121,6 +122,73 @@ def test_explicit_default_and_off_override_integration_compatible_defaults(tmp_p
         metrics = client.get("/metrics").json()["last"]
         assert metrics["generation_preset"] == "default"
         assert metrics["russian_normalization"] == "off"
+
+
+def test_saved_runtime_defaults_drive_generic_requests_and_explicit_model_wins(tmp_path):
+    config = make_test_config(tmp_path)
+    with TestClient(create_app(config=config)) as client:
+        saved = client.put(
+            "/admin/runtime-settings",
+            json={
+                "active_model": "tts-1-ru-quality",
+                "generation_preset": "stable_russian",
+                "russian_normalization": "full",
+                "multilingual_mode": "auto",
+                "chunking_mode": "semantic",
+                "leading_silence_ms": 100,
+                "trailing_silence_ms": 150,
+                "pronunciation_defaults": {"Qwen": "куэн"},
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+    assert (tmp_path / "runtime-settings.json").is_file()
+    with TestClient(create_app(config=config)) as client:
+        generic = client.post(
+            "/v1/audio/speech",
+            json={"model": "tts-1-ru", "voice": "TestNeutral", "input": "Она открыла Visual Studio Code."},
+        )
+        assert generic.status_code == 200, generic.text
+        metrics = client.get("/metrics").json()["last"]
+        assert metrics["effective_model"] == "tts-1-ru-quality"
+        assert metrics["resolved_model"] == "qwen3-tts-1.7b"
+        assert metrics["generation_preset"] == "stable_russian"
+        assert metrics["russian_normalization"] == "full"
+        assert metrics["chunking_mode"] == "semantic"
+        assert metrics["languages"] == ["Russian", "English"]
+        assert metrics["leading_silence_ms"] == 100
+        assert metrics["trailing_silence_ms"] == 150
+
+        explicit = client.post(
+            "/v1/audio/speech",
+            json={"model": "tts-1-ru-fast", "voice": "TestNeutral", "input": "Тест."},
+        )
+        assert explicit.status_code == 200, explicit.text
+        assert client.get("/metrics").json()["last"]["resolved_model"] == "qwen3-tts-0.6b"
+
+
+def test_language_specific_normalization_keeps_english_span_native(tmp_path):
+    config = make_test_config(tmp_path)
+    with TestClient(create_app(config=config)) as client:
+        calls = []
+        original = client.app.state.tts.worker.synthesize
+
+        def recording(text, profile, language="Russian", generation_kwargs=None):
+            calls.append((text, language))
+            return original(text, profile, language, generation_kwargs)
+
+        client.app.state.tts.worker.synthesize = recording
+        response = client.post(
+            "/v1/audio/speech",
+            json={
+                "voice": "TestNeutral",
+                "input": "Version 2 и версия 2.",
+                "russian_normalization": "full",
+                "multilingual_mode": "auto",
+            },
+        )
+        assert response.status_code == 200, response.text
+    assert calls == [("Version 2", "English"), ("и версия два.", "Russian")]
 
 
 def test_clone_rejects_non_wav_and_requires_consent(tmp_path):

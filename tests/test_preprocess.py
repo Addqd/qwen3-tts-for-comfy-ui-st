@@ -1,5 +1,5 @@
 from qwen3_tts_st.emotion import parse_emotion_script, strip_voice_tags
-from qwen3_tts_st.preprocess import preprocess, split_long_text
+from qwen3_tts_st.preprocess import preprocess, split_language_spans, split_long_text
 
 
 def test_preprocess_removes_private_blocks_and_markup():
@@ -23,3 +23,29 @@ def test_long_split_preserves_text():
     chunks = split_long_text("Первое предложение. Второе предложение! Третье?", 25)
     assert len(chunks) >= 2
     assert "Первое предложение." in chunks[0]
+
+
+def test_mixed_russian_english_spans_keep_native_words_and_punctuation():
+    spans = split_language_spans("Она открыла Visual Studio Code и сказала hello.")
+    assert [(span.text, span.language) for span in spans] == [
+        ("Она открыла", "Russian"),
+        ("Visual Studio Code", "English"),
+        ("и сказала", "Russian"),
+        ("hello.", "English"),
+    ]
+
+
+def test_semantic_chunking_never_breaks_short_russian_words():
+    text = "Она пришла. Это она. Он и она пришли вместе. Она сказала, что она останется."
+    chunks = split_long_text(text, 28, "semantic")
+    assert len(chunks) > 1
+    assert " ".join(chunks) == text
+    assert all(not chunk.startswith(("на ", "а ")) for chunk in chunks)
+
+
+def test_semantic_chunking_uses_the_same_safe_boundaries_for_english():
+    text = "She opened Visual Studio Code. Then she said hello, and stayed for the review."
+    chunks = split_long_text(text, 32, "semantic")
+    assert len(chunks) > 1
+    assert " ".join(chunks) == text
+    assert all("Visual" not in chunk or "Studio" in chunk for chunk in chunks)

@@ -236,7 +236,8 @@ def test_service_uses_neutral_narration_quote_scope_and_clean_worker_text(tmp_pa
     assert metadata["styles"] == ["neutral", "tense", "neutral", "whisper", "soft"]
     assert metadata["segment_types"] == ["narration", "dialogue", "narration", "dialogue", "dialogue"]
     assert metadata["voices"] == [neutral, tense, neutral, whisper, neutral]
-    assert [voice for _, voice in captured] == metadata["voices"]
+    assert [voice for _, voice in captured] == metadata["generation_voices"]
+    assert [item["voice"] for item in metadata["generation"]] == metadata["generation_voices"]
     assert all("[voice:" not in text.lower() for text, _ in captured)
     assert all('"' not in text for text, _ in captured)
     assert metadata["router_warnings"] == []

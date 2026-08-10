@@ -220,8 +220,11 @@ class ModelManager:
             raise RuntimeError("compatibility worker недоступен в cuda_on_demand")
         return activation.worker
 
+    def preview(self, alias: str | None = "tts-1-ru") -> ModelActivation:
+        return self._plan(self.registry.resolve(alias))
+
     def preview_default(self) -> ModelActivation:
-        return self._plan(self.registry.resolve("tts-1-ru"))
+        return self.preview("tts-1-ru")
 
     def _unload_locked(self) -> None:
         worker = self.active_worker

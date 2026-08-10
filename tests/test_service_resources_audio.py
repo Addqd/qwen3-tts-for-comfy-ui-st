@@ -6,7 +6,7 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from qwen3_tts_st.audio import stitch
+from qwen3_tts_st.audio import pad_edges, stitch
 from qwen3_tts_st.config import AppConfig, load_config
 from qwen3_tts_st.resources import ResourceSnapshot, choose_mode
 from qwen3_tts_st.service import TTSService
@@ -17,17 +17,31 @@ def config_with(tmp_path, mode="cpu"):
     data["model"]["backend"] = "mock"
     data["resources"]["mode"] = mode
     data["voices"]["library_dir"] = str(tmp_path / "voices")
+    data["runtime"]["settings_file"] = str(tmp_path / "runtime-settings.json")
     return AppConfig(data, tmp_path / "test.yaml")
 
 
 def test_stitch_resamples_and_crossfades():
     first = np.full(2400, 0.2, dtype=np.float32)
     second = np.full(1600, -0.2, dtype=np.float32)
-    output, rate = stitch([(first, 24000), (second, 16000)], pause_ms=10, crossfade_ms=5)
+    output, rate = stitch([(first, 24000), (second, 16000)], crossfade_ms=5)
     assert rate == 24000
     assert output.ndim == 1
     assert np.isfinite(output).all()
     assert np.max(np.abs(output)) <= 1.0
+    assert len(output) == 2400 + 2400 - 120
+
+
+def test_internal_join_has_no_artificial_silence_and_padding_is_outer_only():
+    first = np.full(100, 0.25, dtype=np.float32)
+    second = np.full(100, 0.5, dtype=np.float32)
+    joined, rate = stitch([(first, 1000), (second, 1000)], crossfade_ms=0)
+    assert len(joined) == 200
+    assert np.all(joined != 0)
+    padded = pad_edges(joined, rate, leading_silence_ms=100, trailing_silence_ms=150)
+    assert np.all(padded[:100] == 0)
+    assert np.array_equal(padded[100:300], joined)
+    assert np.all(padded[300:] == 0)
 
 
 @pytest.mark.asyncio
