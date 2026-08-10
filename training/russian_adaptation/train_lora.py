@@ -42,6 +42,12 @@ def freeze_base(model: nn.Module) -> None:
         parameter.requires_grad = False
 
 
+def enable_talker_gradient_checkpointing(core: nn.Module) -> None:
+    core.gradient_checkpointing_enable()
+    core.talker.enable_input_require_grads()
+    core.config.use_cache = False
+
+
 def validate_trainable_parameters(model: nn.Module) -> dict[str, Any]:
     trainable = [(name, parameter.numel()) for name, parameter in model.named_parameters() if parameter.requires_grad]
     if not trainable:
@@ -256,10 +262,6 @@ def train(model_key: str) -> dict[str, Any]:
     if core.config.tts_model_type != "base":
         raise RuntimeError("Selective adaptation requires an untouched Base checkpoint")
     freeze_base(core)
-    if training["gradient_checkpointing"]:
-        core.gradient_checkpointing_enable()
-        core.enable_input_require_grads()
-        core.config.use_cache = False
 
     lora = LoraConfig(
         r=int(model_spec["lora_rank"]),
@@ -275,6 +277,8 @@ def train(model_key: str) -> dict[str, Any]:
         adapter_model = PeftModel.from_pretrained(core, resume_checkpoint / "adapter", is_trainable=True)
         with (resume_checkpoint / "trainer_state.json").open("r", encoding="utf-8") as handle:
             resume_state = json.load(handle)
+    if training["gradient_checkpointing"]:
+        enable_talker_gradient_checkpointing(core)
     trainable_summary = validate_trainable_parameters(adapter_model)
     model = SelectiveTrainingModel(adapter_model, float(training["subtalker_loss_weight"]))
 

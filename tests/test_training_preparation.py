@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 import training.russian_adaptation.prepare_dataset as prepare_dataset_module
-from training.russian_adaptation.common import PACKAGE_DIR, load_plan, ordinary_text
+from training.russian_adaptation.common import PACKAGE_DIR, load_plan, ordinary_text, project_path
 from training.russian_adaptation.dataset import RussianAdaptationDataset
 from training.russian_adaptation.prepare_codes import encode_manifest
 from training.russian_adaptation.prepare_dataset import Candidate, _features, row_is_eligible, select_candidates
@@ -217,3 +218,40 @@ def test_selected_audio_opens_each_shard_once(tmp_path: Path, monkeypatch) -> No
     assert writes[0][0] is writes[1][0]
     assert writes[0][0] is not writes[2][0]
     assert list(paths) == [candidate.item_id for candidate in selected]
+
+
+def test_talker_input_grads_work_with_selective_lora() -> None:
+    pytest.importorskip("peft")
+    from accelerate import init_empty_weights
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoConfig
+
+    from qwen_tts.core.models.configuration_qwen3_tts import Qwen3TTSConfig
+    from qwen_tts.core.models.modeling_qwen3_tts import Qwen3TTSForConditionalGeneration
+    from training.russian_adaptation.train_lora import (
+        enable_talker_gradient_checkpointing,
+        freeze_base,
+        validate_trainable_parameters,
+    )
+
+    plan = load_plan()
+    spec = plan["models"]["0.6b"]
+    source = project_path("model_cache") / "models--Qwen--Qwen3-TTS-12Hz-0.6B-Base" / "snapshots" / spec["revision"]
+    AutoConfig.register("qwen3_tts", Qwen3TTSConfig)
+    config = AutoConfig.from_pretrained(source, local_files_only=True)
+    with init_empty_weights():
+        core = Qwen3TTSForConditionalGeneration(config)
+        freeze_base(core)
+        adapter = get_peft_model(
+            core,
+            LoraConfig(
+                r=spec["lora_rank"],
+                lora_alpha=spec["lora_alpha"],
+                target_modules=plan["training"]["target_module_pattern"],
+            ),
+        )
+        enable_talker_gradient_checkpointing(core)
+
+    summary = validate_trainable_parameters(adapter)
+    assert hasattr(core.talker, "_require_grads_hook")
+    assert summary["trainable_tensor_count"] == 392
