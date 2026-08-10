@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "dataset": {
+    "repo_id": "lab260/golos_balalaika",
+    "revision": "7b41d4d0030b22ee3d10d6bdc79a43a4a428cecf",
+    "seed": 2602026,
+    "train_split": "train",
+    "eval_split": "test",
+    "train_target_seconds": 7200,
+    "eval_target_seconds": 120,
+    "max_seconds_per_selection_group": 900,
+    "filters": {
+      "min_duration_seconds": 1.5,
+      "max_duration_seconds": 8.0,
+      "min_asr_consistency": 90.0,
+      "max_silence_percent": 20.0,
+      "max_single_silence_seconds": 1.0,
+      "max_music_probability": 0.2,
+      "min_distill_mos_when_present": 4.0
+    }
+  },
+  "tokenizer": {
+    "repo_id": "Qwen/Qwen3-TTS-Tokenizer-12Hz",
+    "sample_rate": 24000,
+    "batch_size": 4
+  },
+  "training": {
+    "epochs": 1,
+    "per_device_batch_size": 1,
+    "gradient_accumulation_steps": 16,
+    "checkpoint_optimizer_steps": 100,
+    "warmup_ratio": 0.03,
+    "weight_decay": 0.01,
+    "max_grad_norm": 1.0,
+    "subtalker_loss_weight": 0.3,
+    "precision": "fp16",
+    "attention": "sdpa",
+    "gradient_checkpointing": true,
+    "dataloader_workers": 0,
+    "target_module_pattern": "^talker\\.model\\.layers\\.\\d+\\.(self_attn\\.(q_proj|k_proj|v_proj|o_proj)|mlp\\.(gate_proj|up_proj|down_proj))$"
+  },
+  "models": {
+    "0.6b": {
+      "repo_id": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+      "expected_tts_model_type": "base",
+      "expected_tts_model_size": "0b6",
+      "expected_talker_hidden_size": 1024,
+      "expected_talker_layers": 28,
+      "lora_rank": 8,
+      "lora_alpha": 16,
+      "lora_dropout": 0.05,
+      "learning_rate": 0.00005,
+      "output_dir": "trained_models/qwen3-tts-0.6b-russian-tuned"
+    },
+    "1.7b": {
+      "repo_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "expected_tts_model_type": "base",
+      "expected_tts_model_size": "1b7",
+      "expected_talker_hidden_size": 2048,
+      "expected_talker_layers": 28,
+      "lora_rank": 4,
+      "lora_alpha": 8,
+      "lora_dropout": 0.05,
+      "learning_rate": 0.00003,
+      "output_dir": "trained_models/qwen3-tts-1.7b-russian-tuned"
+    }
+  }
+}

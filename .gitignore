@@ -26,6 +26,8 @@ python_embeded/
 # Runtime and logs
 runtime/
 logs/
+training_data/
+trained_models/
 *.pid
 *.log
 
