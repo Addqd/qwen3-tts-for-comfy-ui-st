@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import torch
 
+import training.russian_adaptation.prepare_dataset as prepare_dataset_module
 from training.russian_adaptation.common import PACKAGE_DIR, load_plan, ordinary_text
 from training.russian_adaptation.dataset import RussianAdaptationDataset
 from training.russian_adaptation.prepare_codes import encode_manifest
@@ -151,6 +152,12 @@ def test_regression_corpus_and_runner_contract() -> None:
     assert sum("игриво" in text.lower() for text in texts) >= 3
 
     runner = (PACKAGE_DIR.parents[1] / "scripts" / "train-russian-adaptation.ps1").read_text(encoding="utf-8")
+    continue_index = runner.index('$ErrorActionPreference = "Continue"')
+    native_call_index = runner.index("& $Python @Arguments 2>&1 | Tee-Object")
+    finally_index = runner.index("finally", native_call_index)
+    restore_index = runner.index("$ErrorActionPreference = $previousErrorActionPreference", finally_index)
+    exit_check_index = runner.index("if ($LASTEXITCODE -ne 0)", restore_index)
+    assert continue_index < native_call_index < finally_index < restore_index < exit_check_index
     assert runner.index('"--model-key", "0.6b"') < runner.index('"--model-key", "1.7b"')
     assert "Start-Process" not in runner
     assert "Start-Job" not in runner
@@ -178,3 +185,35 @@ def test_code_manifest_is_resumable_and_reused(tmp_path: Path) -> None:
     assert not output.with_suffix(".partial.jsonl").exists()
     assert encode_manifest(raw, output, tokenizer, batch_size=1) == 2
     assert tokenizer.calls == 2
+
+
+def test_selected_audio_opens_each_shard_once(tmp_path: Path, monkeypatch) -> None:
+    selected = [_candidate(0), _candidate(1), _candidate(4)]
+    opened: list[Path] = []
+    writes: list[tuple[object, str]] = []
+
+    class FakeArchive:
+        def __init__(self, path: Path):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_open(path, mode):
+        opened.append(path)
+        return FakeArchive(path)
+
+    def fake_write(archive, candidate, destination, sample_rate):
+        writes.append((archive, candidate.item_id))
+
+    monkeypatch.setattr(prepare_dataset_module.tarfile, "open", fake_open)
+    monkeypatch.setattr(prepare_dataset_module, "_write_audio", fake_write)
+    paths = prepare_dataset_module._extract_selected_audio(selected, tmp_path, "train", 24000)
+
+    assert opened == [selected[0].shard_path, selected[2].shard_path]
+    assert writes[0][0] is writes[1][0]
+    assert writes[0][0] is not writes[2][0]
+    assert list(paths) == [candidate.item_id for candidate in selected]

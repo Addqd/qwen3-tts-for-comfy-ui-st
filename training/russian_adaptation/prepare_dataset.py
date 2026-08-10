@@ -181,12 +181,11 @@ def select_candidates(
     return sorted(selected, key=lambda row: row.item_id)
 
 
-def _decode_member(candidate: Candidate, sample_rate: int) -> np.ndarray:
-    with tarfile.open(candidate.shard_path, "r") as archive:
-        handle = archive.extractfile(candidate.audio_member)
-        if handle is None:
-            raise FileNotFoundError(f"Missing {candidate.audio_member} in {candidate.shard_path}")
-        samples, source_rate = sf.read(io.BytesIO(handle.read()), dtype="float32", always_2d=True)
+def _decode_member(archive: tarfile.TarFile, candidate: Candidate, sample_rate: int) -> np.ndarray:
+    handle = archive.extractfile(candidate.audio_member)
+    if handle is None:
+        raise FileNotFoundError(f"Missing {candidate.audio_member} in {candidate.shard_path}")
+    samples, source_rate = sf.read(io.BytesIO(handle.read()), dtype="float32", always_2d=True)
     mono = samples.mean(axis=1)
     if source_rate != sample_rate:
         divisor = gcd(source_rate, sample_rate)
@@ -196,7 +195,12 @@ def _decode_member(candidate: Candidate, sample_rate: int) -> np.ndarray:
     return np.clip(mono, -1.0, 1.0)
 
 
-def _write_audio(candidate: Candidate, destination: Path, sample_rate: int) -> None:
+def _write_audio(
+    archive: tarfile.TarFile,
+    candidate: Candidate,
+    destination: Path,
+    sample_rate: int,
+) -> None:
     if destination.is_file():
         info = sf.info(destination)
         if info.samplerate != sample_rate or info.channels != 1 or info.frames <= 0:
@@ -204,8 +208,27 @@ def _write_audio(candidate: Candidate, destination: Path, sample_rate: int) -> N
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(".tmp.wav")
-    sf.write(temporary, _decode_member(candidate, sample_rate), sample_rate, subtype="PCM_16")
+    sf.write(temporary, _decode_member(archive, candidate, sample_rate), sample_rate, subtype="PCM_16")
     temporary.replace(destination)
+
+
+def _extract_selected_audio(
+    selected: list[Candidate],
+    prepared_root: Path,
+    output_split: str,
+    sample_rate: int,
+) -> dict[str, Path]:
+    by_shard: dict[Path, list[Candidate]] = defaultdict(list)
+    audio_paths: dict[str, Path] = {}
+    for candidate in selected:
+        by_shard[candidate.shard_path].append(candidate)
+        audio_paths[candidate.item_id] = prepared_root / output_split / "targets" / f"{candidate.item_id}.wav"
+
+    for shard_path, shard_candidates in by_shard.items():
+        with tarfile.open(shard_path, "r") as archive:
+            for candidate in shard_candidates:
+                _write_audio(archive, candidate, audio_paths[candidate.item_id], sample_rate)
+    return audio_paths
 
 
 def _manifest_row(
@@ -250,12 +273,9 @@ def _prepare_split(
         per_group_cap_seconds=config["max_seconds_per_selection_group"],
         seed=seed,
     )
-    rows: list[dict[str, Any]] = []
     output_split = "train" if split == config["train_split"] else "eval"
-    for candidate in selected:
-        audio_path = prepared_root / output_split / "targets" / f"{candidate.item_id}.wav"
-        _write_audio(candidate, audio_path, sample_rate)
-        rows.append(_manifest_row(candidate, audio_path, revision))
+    audio_paths = _extract_selected_audio(selected, prepared_root, output_split, sample_rate)
+    rows = [_manifest_row(candidate, audio_paths[candidate.item_id], revision) for candidate in selected]
     write_jsonl_atomic(manifest_path, rows)
     return rows, len(candidates)
 

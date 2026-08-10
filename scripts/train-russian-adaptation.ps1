@@ -28,7 +28,14 @@ function Invoke-LoggedStep {
 
     $heading = "[{0}] {1}" -f (Get-Date -Format "s"), $Name
     $heading | Tee-Object -FilePath $LogPath -Append
-    & $Python @Arguments 2>&1 | Tee-Object -FilePath $LogPath -Append
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $Python @Arguments 2>&1 | Tee-Object -FilePath $LogPath -Append
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "$Name failed with exit code $LASTEXITCODE. See $LogPath"
     }
