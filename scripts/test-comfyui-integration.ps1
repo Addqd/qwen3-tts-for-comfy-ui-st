@@ -47,7 +47,7 @@ $Health = Invoke-RestMethod -Uri "$BackendUrl/health" -TimeoutSec 15
 $Models = Invoke-RestMethod -Uri "$BackendUrl/v1/models" -TimeoutSec 15
 $Voices = Invoke-RestMethod -Uri "$BackendUrl/v1/voices" -TimeoutSec 15
 $Objects = Invoke-RestMethod -Uri "$ComfyUrl/object_info" -TimeoutSec 30
-$ExpectedNodes = @("QwenTTSServer", "QwenTTSSynthesize", "QwenTTSCloneVoice", "QwenTTSVoiceSelector", "QwenTTSEmotionScript", "QwenTTSModels", "QwenTTSHealth")
+$ExpectedNodes = @("QwenTTSServer", "QwenTTSRuntimeSettings", "QwenTTSSynthesize", "QwenTTSCloneVoice", "QwenTTSVoiceSelector", "QwenTTSEmotionScript", "QwenTTSModels", "QwenTTSHealth")
 $Missing = @($ExpectedNodes | Where-Object { $null -eq $Objects.$_ })
 if ($Missing.Count) { throw "ComfyUI missing Qwen nodes: $($Missing -join ', ')" }
 $WorkflowDirectory = Join-Path $script:ProjectRoot "integrations\comfyui\example_workflows"

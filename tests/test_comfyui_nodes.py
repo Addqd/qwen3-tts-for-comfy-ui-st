@@ -32,7 +32,8 @@ def test_node_package_has_expected_mappings():
     nodes = load_nodes()
     assert set(nodes.NODE_CLASS_MAPPINGS) == {
         "QwenTTSServer", "QwenTTSSynthesize", "QwenTTSCloneVoice",
-        "QwenTTSVoiceSelector", "QwenTTSEmotionScript", "QwenTTSModels", "QwenTTSHealth",
+        "QwenTTSRuntimeSettings", "QwenTTSVoiceSelector", "QwenTTSEmotionScript",
+        "QwenTTSModels", "QwenTTSHealth",
     }
     output_nodes = {name for name, node in nodes.NODE_CLASS_MAPPINGS.items() if getattr(node, "OUTPUT_NODE", False)}
     assert {"QwenTTSSynthesize", "QwenTTSVoiceSelector", "QwenTTSEmotionScript", "QwenTTSModels", "QwenTTSHealth"} <= output_nodes
@@ -75,6 +76,39 @@ def test_example_workflows_are_valid_json_with_available_node_types():
         assert all(link[1] in node_ids and link[3] in node_ids for link in workflow["links"])
         types = {node["type"] for node in workflow["nodes"]}
         assert types <= set(nodes.NODE_CLASS_MAPPINGS) | builtins
+
+
+def test_canonical_voice_lab_has_safe_quality_runtime_flow():
+    workflow = json.loads((WORKFLOW_DIR / "voice_profile_from_wav_ru.json").read_text(encoding="utf-8"))
+    by_type = {node["type"]: node for node in workflow["nodes"]}
+    assert set(by_type) == {
+        "QwenTTSServer",
+        "QwenTTSRuntimeSettings",
+        "LoadAudio",
+        "QwenTTSCloneVoice",
+        "QwenTTSSynthesize",
+        "PreviewAudio",
+    }
+    assert by_type["QwenTTSServer"]["widgets_values"][2] == "Backend Default (tts-1-ru)"
+    assert by_type["QwenTTSRuntimeSettings"]["widgets_values"][:3] == [
+        True,
+        "1.7B Quality (tts-1-ru-quality)",
+        "Stable Russian",
+    ]
+    assert by_type["QwenTTSCloneVoice"]["widgets_values"][-2:] == [False, False]
+    synth = by_type["QwenTTSSynthesize"]["widgets_values"]
+    assert synth[2] == "Inherit Server model"
+    assert synth[6:] == [
+        "Use Backend Default",
+        "Use Backend Default",
+        "",
+        "Use Backend Default",
+        "Use Backend Default",
+        -1,
+        -1,
+    ]
+    voice_link = next(link for link in workflow["links"] if link[0] == 5)
+    assert voice_link[3:5] == [by_type["QwenTTSSynthesize"]["id"], 2]
 
 
 def test_endpoint_rejects_non_local_address():
@@ -148,11 +182,25 @@ def test_synthesize_exposes_model_quality_and_russian_controls(monkeypatch):
         "0.6B Fast (tts-1-ru-fast)",
         "1.7B Quality (tts-1-ru-quality)",
     ]
-    assert inputs["optional"]["generation_preset"][0] == ["Default", "Stable Russian"]
+    assert inputs["optional"]["generation_preset"][0] == [
+        "Use Backend Default",
+        "Default",
+        "Stable Russian",
+    ]
     assert inputs["optional"]["russian_normalization"][0] == [
+        "Use Backend Default",
         "Off",
         "Basic Russian",
         "Full Russian",
+    ]
+    assert inputs["optional"]["chunking_mode"][0] == [
+        "Use Backend Default",
+        "Semantic / prosody-aware",
+        "Off",
+    ]
+    assert nodes.QwenTTSRuntimeSettingsNode.INPUT_TYPES()["required"]["chunking_mode"][0] == [
+        "Semantic / prosody-aware",
+        "Off",
     ]
     assert inputs["required"]["model"][1]["default"] == "Inherit Server model"
 
@@ -193,6 +241,37 @@ def test_synthesize_exposes_model_quality_and_russian_controls(monkeypatch):
     metadata = json.loads(result[2])
     assert metadata["resolved_model"] == "qwen3-tts-1.7b"
     assert metadata["pronunciation_override_count"] == 1
+
+
+def test_runtime_settings_node_reads_or_persists_backend_defaults(monkeypatch):
+    nodes = load_nodes()
+    calls = []
+
+    def response(_server, path, payload=None, method=None):
+        calls.append((path, payload, method))
+        settings = payload or {"active_model": "tts-1-ru"}
+        return {"status": "ok", "settings": settings}, {}
+
+    monkeypatch.setattr(nodes, "_json_request", response)
+    server = {"endpoint": "http://127.0.0.1:8020", "timeout": 10, "model": "tts-1-ru"}
+    result = result_of(
+        nodes.QwenTTSRuntimeSettingsNode().configure(
+            server,
+            True,
+            "1.7B Quality (tts-1-ru-quality)",
+            "Stable Russian",
+            "Full Russian",
+            "Auto Russian + English",
+            "Semantic / prosody-aware",
+            100,
+            150,
+            "Qwen = куэн",
+        )
+    )
+    assert calls[0][0:3:2] == ("/admin/runtime-settings", "PUT")
+    assert calls[0][1]["active_model"] == "tts-1-ru-quality"
+    assert calls[0][1]["multilingual_mode"] == "auto"
+    assert json.loads(result[1])["pronunciation_defaults"] == {"Qwen": "куэн"}
 
 
 def test_synthesize_inherits_quality_server_model_and_keeps_legacy_values(monkeypatch):

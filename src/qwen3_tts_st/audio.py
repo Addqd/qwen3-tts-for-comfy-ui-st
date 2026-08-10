@@ -24,21 +24,27 @@ def resample(waveform: np.ndarray, source_rate: int, target_rate: int) -> np.nda
     return resample_poly(normalize_waveform(waveform), target_rate // divisor, source_rate // divisor).astype(np.float32)
 
 
-def stitch(parts: list[tuple[np.ndarray, int]], pause_ms: int = 120, crossfade_ms: int = 8) -> tuple[np.ndarray, int]:
+def stitch(parts: list[tuple[np.ndarray, int]], crossfade_ms: int = 8) -> tuple[np.ndarray, int]:
+    """Join internal synthesis parts without inserting artificial silence."""
+
     if not parts:
         raise ValueError("нет аудиосегментов для объединения")
     target_rate = parts[0][1]
     prepared = [resample(wav, rate, target_rate) for wav, rate in parts]
     output = prepared[0]
-    silence = np.zeros(int(target_rate * pause_ms / 1000), dtype=np.float32)
     fade_size = int(target_rate * crossfade_ms / 1000)
     for part in prepared[1:]:
-        if fade_size > 0 and len(output) >= fade_size and len(part) >= fade_size:
-            fade_out = np.linspace(1.0, 0.0, fade_size, dtype=np.float32)
-            fade_in = 1.0 - fade_out
-            output[-fade_size:] = output[-fade_size:] * fade_out
-            part[:fade_size] = part[:fade_size] * fade_in
-        output = np.concatenate((output, silence, part))
+        overlap = min(fade_size, len(output), len(part))
+        if overlap > 0:
+            fade_in = (
+                np.array([0.5], dtype=np.float32)
+                if overlap == 1
+                else np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+            )
+            mixed = output[-overlap:] * (1.0 - fade_in) + part[:overlap] * fade_in
+            output = np.concatenate((output[:-overlap], mixed, part[overlap:]))
+        else:
+            output = np.concatenate((output, part))
     return output.clip(-1.0, 1.0), target_rate
 
 
@@ -48,6 +54,29 @@ def change_speed(waveform: np.ndarray, speed: float) -> np.ndarray:
     import librosa
 
     return librosa.effects.time_stretch(normalize_waveform(waveform), rate=speed).astype(np.float32)
+
+
+def fade_edges(waveform: np.ndarray, sample_rate: int, fade_ms: int = 5) -> np.ndarray:
+    value = normalize_waveform(waveform).copy()
+    size = min(len(value) // 2, max(0, int(sample_rate * fade_ms / 1000)))
+    if size:
+        fade = np.linspace(0.0, 1.0, size, dtype=np.float32)
+        value[:size] *= fade
+        value[-size:] *= fade[::-1]
+    return value
+
+
+def pad_edges(
+    waveform: np.ndarray,
+    sample_rate: int,
+    leading_silence_ms: int = 100,
+    trailing_silence_ms: int = 150,
+) -> np.ndarray:
+    """Pad a complete utterance once, strictly at its absolute edges."""
+
+    leading = np.zeros(max(0, int(sample_rate * leading_silence_ms / 1000)), dtype=np.float32)
+    trailing = np.zeros(max(0, int(sample_rate * trailing_silence_ms / 1000)), dtype=np.float32)
+    return np.concatenate((leading, normalize_waveform(waveform), trailing))
 
 
 def wav_bytes(waveform: np.ndarray, sample_rate: int) -> bytes:
@@ -78,4 +107,3 @@ def encode(waveform: np.ndarray, sample_rate: int, response_format: str) -> tupl
     if result.returncode != 0:
         raise RuntimeError(f"FFmpeg не смог кодировать {fmt}: {result.stderr.decode('utf-8', errors='replace')[-500:]}")
     return result.stdout, MIME_TYPES[fmt]
-

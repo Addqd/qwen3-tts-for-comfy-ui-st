@@ -1,5 +1,7 @@
 # Локальная Qwen3-TTS для Windows
 
+Единое актуальное руководство по backend quality pipeline, Voice Lab, runtime settings и API: [docs/GUIDE_RU.md](docs/GUIDE_RU.md).
+
 Один локальный backend загружает `Qwen/Qwen3-TTS-12Hz-0.6B-Base` и обслуживает SillyTavern, ComfyUI и другие OpenAI-compatible TTS-клиенты через `127.0.0.1:8020`. Модель не загружается в ComfyUI и не связана с используемой LLM.
 
 ## Что уже проверено на этой машине

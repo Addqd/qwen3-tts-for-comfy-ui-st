@@ -33,6 +33,7 @@ logs/
 local_voice_samples/
 voice_library/inbox/*
 voice_library/profiles/
+voice_library/backups/
 voice_library/profiles/**/reference.wav
 !voice_library/inbox/.gitkeep
 

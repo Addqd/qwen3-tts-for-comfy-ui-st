@@ -112,7 +112,11 @@ def _normalize_full(text: str) -> str:
     value = re.sub(r"(?<!\d)([0-2]?\d):([0-5]\d)(?!\d)", time_value, text)
     value = re.sub(r"(?<![\w.,])(-?\d{1,6})\s*%(?!\w)", percent_value, value)
     value = re.sub(r"(?<![\w.,])(-?\d{1,6})[.,](\d{1,2})(?!\d)", decimal_value, value)
-    value = re.sub(r"(?<![\w.,:])-?\d{1,6}(?![\w.,:])", lambda match: integer_to_words(int(match.group(0))), value)
+    value = re.sub(
+        r"(?<![\w.,:])-?\d{1,6}(?![\w,:]|\.\d)",
+        lambda match: integer_to_words(int(match.group(0))),
+        value,
+    )
     return value
 
 

@@ -65,12 +65,12 @@ def _patch_dependencies(monkeypatch, workers, fail=False):
     monkeypatch.setattr(worker_process, "QwenWorker", FakeWorker)
 
 
-def test_worker_process_forces_russian_and_unloads_after_success(tmp_path, monkeypatch):
+def test_worker_process_uses_validated_job_language_and_unloads_after_success(tmp_path, monkeypatch):
     workers = []
     _patch_dependencies(monkeypatch, workers)
     monkeypatch.setattr(sys, "argv", ["worker_process", "--job", str(_job(tmp_path))])
     assert worker_process.main() == 0
-    assert workers[0].language == "Russian"
+    assert workers[0].language == "English"
     assert workers[0].unloaded is True
 
 
@@ -90,5 +90,5 @@ def test_worker_process_unloads_after_output_write_failure(tmp_path, monkeypatch
     monkeypatch.setattr(sys, "argv", ["worker_process", "--job", str(_job(tmp_path))])
     with pytest.raises(OSError, match="disk full"):
         worker_process.main()
-    assert workers[0].language == "Russian"
+    assert workers[0].language == "English"
     assert workers[0].unloaded is True

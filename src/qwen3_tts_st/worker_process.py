@@ -31,6 +31,9 @@ def main() -> int:
         runtime=resolved.spec.runtime,
     )
     try:
+        language = str(job.get("language", "Russian"))
+        if language not in {"Russian", "English"}:
+            raise ValueError(f"unsupported synthesis language: {language}")
         preset = str(job.get("generation_preset", "default"))
         generate = generation_kwargs(config, preset, resolved.spec)
         # QwenWorker.synthesize() owns lazy load; an extra load() here would
@@ -38,7 +41,7 @@ def main() -> int:
         waveform, sample_rate, metrics = worker.synthesize(
             job["text"],
             profile,
-            "Russian",
+            language,
             generation_kwargs=generate,
         )
         metrics.update(

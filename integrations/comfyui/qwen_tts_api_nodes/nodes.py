@@ -16,7 +16,7 @@ import numpy as np
 
 
 CATEGORY = "Qwen TTS API"
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 INHERIT_SERVER_MODEL = "Inherit Server model"
 SERVER_MODEL_OPTIONS = (
     "Backend Default (tts-1-ru)",
@@ -35,8 +35,11 @@ MODEL_ALIASES = {
     "tts-1-ru-fast": "tts-1-ru-fast",
     "tts-1-ru-quality": "tts-1-ru-quality",
 }
-GENERATION_PRESET_OPTIONS = ("Default", "Stable Russian")
-NORMALIZATION_OPTIONS = ("Off", "Basic Russian", "Full Russian")
+BACKEND_DEFAULT = "Use Backend Default"
+GENERATION_PRESET_OPTIONS = (BACKEND_DEFAULT, "Default", "Stable Russian")
+NORMALIZATION_OPTIONS = (BACKEND_DEFAULT, "Off", "Basic Russian", "Full Russian")
+MULTILINGUAL_OPTIONS = (BACKEND_DEFAULT, "Auto Russian + English", "Off (Russian only)")
+CHUNKING_OPTIONS = (BACKEND_DEFAULT, "Semantic / prosody-aware", "Off")
 ALLOWED_STYLES = (
     "neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense", "pleasure", "intimate"
 )
@@ -166,12 +169,20 @@ def _model_alias(value: str | None, server: dict) -> str:
     return (selected or str(server.get("model") or "tts-1-ru")).strip()
 
 
-def _generation_preset(value: str) -> str:
-    return {"Default": "default", "Stable Russian": "stable_russian"}.get(value, value)
+def _generation_preset(value: str) -> str | None:
+    return {BACKEND_DEFAULT: None, "Default": "default", "Stable Russian": "stable_russian"}.get(value, value)
 
 
-def _normalization_mode(value: str) -> str:
-    return {"Off": "off", "Basic Russian": "basic", "Full Russian": "full"}.get(value, value)
+def _normalization_mode(value: str) -> str | None:
+    return {BACKEND_DEFAULT: None, "Off": "off", "Basic Russian": "basic", "Full Russian": "full"}.get(value, value)
+
+
+def _multilingual_mode(value: str) -> str | None:
+    return {BACKEND_DEFAULT: None, "Auto Russian + English": "auto", "Off (Russian only)": "off"}.get(value, value)
+
+
+def _chunking_mode(value: str) -> str | None:
+    return {BACKEND_DEFAULT: None, "Semantic / prosody-aware": "semantic", "Off": "off"}.get(value, value)
 
 
 def _pronunciation_overrides(value: str) -> dict[str, str]:
@@ -189,13 +200,13 @@ def _pronunciation_overrides(value: str) -> dict[str, str]:
     return result
 
 
-def _json_request(server: dict, path: str, payload: dict | None = None) -> tuple[Any, Any]:
+def _json_request(server: dict, path: str, payload: dict | None = None, method: str | None = None) -> tuple[Any, Any]:
     url = _endpoint(server["endpoint"]) + path
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Accept": "application/json"}
     if data is not None:
         headers["Content-Type"] = "application/json; charset=utf-8"
-    req = request.Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
+    req = request.Request(url, data=data, headers=headers, method=method or ("POST" if data is not None else "GET"))
     try:
         response = request.urlopen(req, timeout=float(server["timeout"]))
         content_type = response.headers.get("Content-Type", "")
@@ -283,6 +294,67 @@ class QwenTTSServerNode:
         return server, status
 
 
+class QwenTTSRuntimeSettingsNode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "server": ("QWEN_TTS_SERVER",),
+                "apply_and_save": ("BOOLEAN", {"default": False}),
+                "active_model": (list(SERVER_MODEL_OPTIONS), {"default": SERVER_MODEL_OPTIONS[0]}),
+                "generation_preset": (["Default", "Stable Russian"], {"default": "Stable Russian"}),
+                "russian_normalization": (["Off", "Basic Russian", "Full Russian"], {"default": "Full Russian"}),
+                "multilingual_mode": (["Auto Russian + English", "Off (Russian only)"], {"default": "Auto Russian + English"}),
+                "chunking_mode": (["Semantic / prosody-aware", "Off"], {"default": "Semantic / prosody-aware"}),
+                "leading_silence_ms": ("INT", {"default": 100, "min": 0, "max": 2000}),
+                "trailing_silence_ms": ("INT", {"default": 150, "min": 0, "max": 2000}),
+            },
+            "optional": {
+                "pronunciation_defaults": (
+                    "STRING",
+                    {"multiline": True, "default": "", "placeholder": "Qwen = куэн\nComfyUI = комфи ю ай"},
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("QWEN_TTS_SERVER", "STRING")
+    RETURN_NAMES = ("server", "settings_json")
+    FUNCTION = "configure"
+    CATEGORY = CATEGORY
+    OUTPUT_NODE = True
+
+    def configure(
+        self,
+        server,
+        apply_and_save,
+        active_model,
+        generation_preset,
+        russian_normalization,
+        multilingual_mode,
+        chunking_mode,
+        leading_silence_ms,
+        trailing_silence_ms,
+        pronunciation_defaults="",
+    ):
+        if apply_and_save:
+            payload = {
+                "active_model": _model_alias(active_model, {}),
+                "generation_preset": _generation_preset(generation_preset),
+                "russian_normalization": _normalization_mode(russian_normalization),
+                "multilingual_mode": _multilingual_mode(multilingual_mode),
+                "chunking_mode": _chunking_mode(chunking_mode),
+                "leading_silence_ms": int(leading_silence_ms),
+                "trailing_silence_ms": int(trailing_silence_ms),
+                "pronunciation_defaults": _pronunciation_overrides(pronunciation_defaults),
+            }
+            result, _ = _json_request(server, "/admin/runtime-settings", payload, method="PUT")
+        else:
+            result, _ = _json_request(server, "/admin/runtime-settings")
+        settings = result.get("settings", result)
+        rendered = json.dumps(settings, ensure_ascii=False)
+        return _ui_result("qwen_tts_runtime_settings", (server, rendered), settings)
+
+
 class QwenTTSSynthesizeNode:
     @classmethod
     def INPUT_TYPES(cls):
@@ -299,8 +371,8 @@ class QwenTTSSynthesizeNode:
             "optional": {
                 # Keep emotion_script first for migration of version 0.3 workflows.
                 "emotion_script": ("STRING", {"multiline": True, "default": ""}),
-                "generation_preset": (list(GENERATION_PRESET_OPTIONS), {"default": "Default"}),
-                "russian_normalization": (list(NORMALIZATION_OPTIONS), {"default": "Off"}),
+                "generation_preset": (list(GENERATION_PRESET_OPTIONS), {"default": BACKEND_DEFAULT}),
+                "russian_normalization": (list(NORMALIZATION_OPTIONS), {"default": BACKEND_DEFAULT}),
                 "pronunciation_overrides": (
                     "STRING",
                     {
@@ -309,6 +381,10 @@ class QwenTTSSynthesizeNode:
                         "placeholder": "Qwen = куэн\nComfyUI = комфи ю ай",
                     },
                 ),
+                "multilingual_mode": (list(MULTILINGUAL_OPTIONS), {"default": BACKEND_DEFAULT}),
+                "chunking_mode": (list(CHUNKING_OPTIONS), {"default": BACKEND_DEFAULT}),
+                "leading_silence_ms": ("INT", {"default": -1, "min": -1, "max": 2000}),
+                "trailing_silence_ms": ("INT", {"default": -1, "min": -1, "max": 2000}),
             },
         }
 
@@ -328,9 +404,13 @@ class QwenTTSSynthesizeNode:
         response_format,
         preprocessing_mode,
         emotion_script="",
-        generation_preset="Default",
-        russian_normalization="Off",
+        generation_preset=BACKEND_DEFAULT,
+        russian_normalization=BACKEND_DEFAULT,
         pronunciation_overrides="",
+        multilingual_mode=BACKEND_DEFAULT,
+        chunking_mode=BACKEND_DEFAULT,
+        leading_silence_ms=-1,
+        trailing_silence_ms=-1,
     ):
         spoken = emotion_script.strip() or text
         payload = {
@@ -340,10 +420,17 @@ class QwenTTSSynthesizeNode:
             "speed": speed,
             "response_format": response_format,
             "preprocessing_mode": preprocessing_mode,
-            "generation_preset": _generation_preset(generation_preset),
-            "russian_normalization": _normalization_mode(russian_normalization),
             "pronunciation_overrides": _pronunciation_overrides(pronunciation_overrides),
         }
+        optional_values = {
+            "generation_preset": _generation_preset(generation_preset),
+            "russian_normalization": _normalization_mode(russian_normalization),
+            "multilingual_mode": _multilingual_mode(multilingual_mode),
+            "chunking_mode": _chunking_mode(chunking_mode),
+            "leading_silence_ms": None if int(leading_silence_ms) < 0 else int(leading_silence_ms),
+            "trailing_silence_ms": None if int(trailing_silence_ms) < 0 else int(trailing_silence_ms),
+        }
+        payload.update({key: value for key, value in optional_values.items() if value is not None})
         body, headers = _json_request(server, "/v1/audio/speech", payload)
         stamp = int(time.time() * 1000)
         response_path = _temp_dir() / f"qwen-tts-{stamp}.{response_format}"
@@ -358,8 +445,10 @@ class QwenTTSSynthesizeNode:
             {
                 "requested_model": payload["model"],
                 "resolved_model": headers.get("X-TTS-Resolved-Model"),
-                "generation_preset": payload["generation_preset"],
-                "russian_normalization": payload["russian_normalization"],
+                "generation_preset": headers.get("X-TTS-Generation-Preset", payload.get("generation_preset", "backend_default")),
+                "russian_normalization": headers.get("X-TTS-Russian-Normalization", payload.get("russian_normalization", "backend_default")),
+                "multilingual_mode": headers.get("X-TTS-Multilingual-Mode", payload.get("multilingual_mode", "backend_default")),
+                "chunking_mode": headers.get("X-TTS-Chunking-Mode", payload.get("chunking_mode", "backend_default")),
                 "pronunciation_override_count": len(payload["pronunciation_overrides"]),
                 "voice": voice,
                 "format": response_format,
@@ -512,6 +601,7 @@ class QwenTTSHealthNode:
 
 NODE_CLASS_MAPPINGS = {
     "QwenTTSServer": QwenTTSServerNode,
+    "QwenTTSRuntimeSettings": QwenTTSRuntimeSettingsNode,
     "QwenTTSSynthesize": QwenTTSSynthesizeNode,
     "QwenTTSCloneVoice": QwenTTSCloneVoiceNode,
     "QwenTTSVoiceSelector": QwenTTSVoiceSelectorNode,
@@ -522,6 +612,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "QwenTTSServer": "Qwen TTS Server",
+    "QwenTTSRuntimeSettings": "Qwen TTS Runtime Settings",
     "QwenTTSSynthesize": "Qwen TTS Synthesize",
     "QwenTTSCloneVoice": "Qwen TTS Clone Voice",
     "QwenTTSVoiceSelector": "Qwen TTS Voice Selector",

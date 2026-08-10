@@ -1,10 +1,11 @@
 # Qwen TTS API nodes для ComfyUI
 
-Версия нод `0.4.1`. Это лёгкие localhost HTTP-клиенты для отдельного backend `http://127.0.0.1:8020`. В пакет не входят `torch`, `transformers`, `qwen_tts` или CUDA-библиотеки; модель и voice library остаются в backend-процессе.
+Версия нод `0.5.0`. Это лёгкие localhost HTTP-клиенты для отдельного backend `http://127.0.0.1:8020`. В пакет не входят `torch`, `transformers`, `qwen_tts` или CUDA-библиотеки; модель и voice library остаются в backend-процессе.
 
 ## Ноды
 
 - Server — endpoint, timeout, model, format и состояние соединения.
+- Runtime Settings — чтение и локальное сохранение backend quality defaults для всех клиентов.
 - Health — `/health` и `/v1/voices`.
 - Models — `/v1/models`.
 - Voice Selector — список voices и понятное сообщение для отсутствующего ID.
