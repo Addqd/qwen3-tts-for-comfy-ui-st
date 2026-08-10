@@ -32,6 +32,15 @@ def test_stitch_resamples_and_crossfades():
     assert len(output) == 2400 + 2400 - 120
 
 
+def test_one_sample_overlap_blends_both_parts():
+    output, rate = stitch(
+        [(np.array([0.2], dtype=np.float32), 1000), (np.array([0.8], dtype=np.float32), 1000)],
+        crossfade_ms=1,
+    )
+    assert rate == 1000
+    assert output == pytest.approx([0.5])
+
+
 def test_internal_join_has_no_artificial_silence_and_padding_is_outer_only():
     first = np.full(100, 0.25, dtype=np.float32)
     second = np.full(100, 0.5, dtype=np.float32)

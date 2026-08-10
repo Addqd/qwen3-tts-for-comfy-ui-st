@@ -36,7 +36,11 @@ def stitch(parts: list[tuple[np.ndarray, int]], crossfade_ms: int = 8) -> tuple[
     for part in prepared[1:]:
         overlap = min(fade_size, len(output), len(part))
         if overlap > 0:
-            fade_in = np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+            fade_in = (
+                np.array([0.5], dtype=np.float32)
+                if overlap == 1
+                else np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+            )
             mixed = output[-overlap:] * (1.0 - fade_in) + part[:overlap] * fade_in
             output = np.concatenate((output[:-overlap], mixed, part[overlap:]))
         else:

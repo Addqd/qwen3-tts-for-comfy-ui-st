@@ -1,3 +1,5 @@
+import pytest
+
 from qwen3_tts_st.emotion import parse_emotion_script, strip_voice_tags
 from qwen3_tts_st.preprocess import preprocess, split_language_spans, split_long_text
 
@@ -23,6 +25,13 @@ def test_long_split_preserves_text():
     chunks = split_long_text("Первое предложение. Второе предложение! Третье?", 25)
     assert len(chunks) >= 2
     assert "Первое предложение." in chunks[0]
+
+
+def test_chunking_rejects_invalid_mode_and_too_small_semantic_limit_before_short_return():
+    with pytest.raises(ValueError, match="chunking mode"):
+        split_long_text("text", mode="invalid")
+    with pytest.raises(ValueError, match="не меньше 8"):
+        split_long_text("text", max_chars=7, mode="semantic")
 
 
 def test_mixed_russian_english_spans_keep_native_words_and_punctuation():

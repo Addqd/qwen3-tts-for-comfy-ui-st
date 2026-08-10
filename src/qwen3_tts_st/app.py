@@ -31,7 +31,7 @@ class SpeechRequest(BaseModel):
     russian_normalization: Literal["off", "basic", "full"] | None = None
     pronunciation_overrides: dict[str, str] | str | None = None
     multilingual_mode: Literal["off", "auto"] | None = None
-    chunking_mode: Literal["off", "legacy", "semantic"] | None = None
+    chunking_mode: Literal["off", "semantic"] | None = None
     leading_silence_ms: int | None = Field(default=None, ge=0, le=2000)
     trailing_silence_ms: int | None = Field(default=None, ge=0, le=2000)
 
@@ -47,7 +47,7 @@ class RuntimeSettingsRequest(BaseModel):
     generation_preset: Literal["default", "stable_russian"]
     russian_normalization: Literal["off", "basic", "full"]
     multilingual_mode: Literal["off", "auto"]
-    chunking_mode: Literal["off", "legacy", "semantic"]
+    chunking_mode: Literal["off", "semantic"]
     leading_silence_ms: int = Field(ge=0, le=2000)
     trailing_silence_ms: int = Field(ge=0, le=2000)
     pronunciation_defaults: dict[str, str] | str = Field(default_factory=dict)

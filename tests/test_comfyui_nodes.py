@@ -89,17 +89,24 @@ def test_canonical_voice_lab_has_safe_quality_runtime_flow():
         "QwenTTSSynthesize",
         "PreviewAudio",
     }
-    assert by_type["QwenTTSServer"]["widgets_values"][2].startswith("1.7B Quality")
+    assert by_type["QwenTTSServer"]["widgets_values"][2] == "Backend Default (tts-1-ru)"
     assert by_type["QwenTTSRuntimeSettings"]["widgets_values"][:3] == [
-        False,
+        True,
         "1.7B Quality (tts-1-ru-quality)",
         "Stable Russian",
     ]
     assert by_type["QwenTTSCloneVoice"]["widgets_values"][-2:] == [False, False]
     synth = by_type["QwenTTSSynthesize"]["widgets_values"]
     assert synth[2] == "Inherit Server model"
-    assert "Auto Russian + English" in synth
-    assert "Semantic / prosody-aware" in synth
+    assert synth[6:] == [
+        "Use Backend Default",
+        "Use Backend Default",
+        "",
+        "Use Backend Default",
+        "Use Backend Default",
+        -1,
+        -1,
+    ]
     voice_link = next(link for link in workflow["links"] if link[0] == 5)
     assert voice_link[3:5] == [by_type["QwenTTSSynthesize"]["id"], 2]
 
@@ -185,6 +192,15 @@ def test_synthesize_exposes_model_quality_and_russian_controls(monkeypatch):
         "Off",
         "Basic Russian",
         "Full Russian",
+    ]
+    assert inputs["optional"]["chunking_mode"][0] == [
+        "Use Backend Default",
+        "Semantic / prosody-aware",
+        "Off",
+    ]
+    assert nodes.QwenTTSRuntimeSettingsNode.INPUT_TYPES()["required"]["chunking_mode"][0] == [
+        "Semantic / prosody-aware",
+        "Off",
     ]
     assert inputs["required"]["model"][1]["default"] == "Inherit Server model"
 

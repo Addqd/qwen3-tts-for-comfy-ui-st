@@ -99,15 +99,17 @@ def _semantic_boundary(value: str, limit: int) -> int | None:
 def split_long_text(text: str, max_chars: int = 320, mode: str = "semantic") -> list[str]:
     """Split on semantic/whitespace boundaries and never inside a word."""
 
-    value = text.strip()
-    if not value:
-        return []
-    if mode == "off" or len(value) <= max_chars:
-        return [value]
-    if mode not in {"semantic", "legacy"}:
+    if mode not in {"semantic", "off"}:
         raise ValueError(f"неизвестный chunking mode: {mode}")
+    value = text.strip()
+    if mode == "off":
+        return [value] if value else []
     if max_chars < 8:
         raise ValueError("chunking.max_chars должен быть не меньше 8")
+    if not value:
+        return []
+    if len(value) <= max_chars:
+        return [value]
 
     chunks: list[str] = []
     remaining = value

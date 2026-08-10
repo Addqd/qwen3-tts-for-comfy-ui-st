@@ -191,6 +191,17 @@ def test_language_specific_normalization_keeps_english_span_native(tmp_path):
     assert calls == [("Version 2", "English"), ("и версия два.", "Russian")]
 
 
+def test_api_rejects_removed_legacy_chunking_mode(tmp_path):
+    with TestClient(create_app(config=make_test_config(tmp_path))) as client:
+        settings = client.get("/admin/runtime-settings").json()["settings"]
+        settings["chunking_mode"] = "legacy"
+        assert client.put("/admin/runtime-settings", json=settings).status_code == 422
+        assert client.post(
+            "/v1/audio/speech",
+            json={"voice": "TestNeutral", "input": "Short text.", "chunking_mode": "legacy"},
+        ).status_code == 422
+
+
 def test_clone_rejects_non_wav_and_requires_consent(tmp_path):
     import base64
 

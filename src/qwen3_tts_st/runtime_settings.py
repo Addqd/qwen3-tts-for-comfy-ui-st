@@ -50,7 +50,7 @@ class RuntimeSettingsStore:
             raise ValueError(f"неизвестный russian_normalization: {result['russian_normalization']}")
         if result["multilingual_mode"] not in {"off", "auto"}:
             raise ValueError(f"неизвестный multilingual_mode: {result['multilingual_mode']}")
-        if result["chunking_mode"] not in {"off", "legacy", "semantic"}:
+        if result["chunking_mode"] not in {"off", "semantic"}:
             raise ValueError(f"неизвестный chunking_mode: {result['chunking_mode']}")
         for key in ("leading_silence_ms", "trailing_silence_ms"):
             result[key] = int(result[key])

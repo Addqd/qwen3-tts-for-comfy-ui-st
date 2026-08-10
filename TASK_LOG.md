@@ -159,3 +159,10 @@
 - ComfyUI-ноды обновлены до `0.5.0`: добавлена `Qwen TTS Runtime Settings`, Synthesize умеет наследовать backend defaults, а canonical `voice_profile_from_wav_ru.json` переведён на безопасную цепочку Server → Runtime Settings → Clone/Synthesize → Preview с выключенными consent/overwrite.
 - Создан единый `docs/GUIDE_RU.md`; исходники SillyTavern, установленная ComfyUI, пользовательские WAV/profiles, модели и screenshots не изменялись и не создавались.
 - Финальная автоматическая проверка: `pytest -q` → `104 passed`; compileall success; project `.venv` `pip check` clean; 14 tracked JSON и 9 tracked YAML прочитаны как UTF-8; project PowerShell scripts разобраны UTF-8-aware parser; `git diff --check` clean. Реальный Qwen/GPU smoke намеренно не выполнялся на этом этапе.
+
+## 2026-08-10 — Follow-up PR #7
+
+- Исправлены три актуальных review findings: one-sample overlap теперь смешивает оба входа, `split_long_text` валидирует mode/semantic limit до короткого возврата, а формулировка regression corpus в `GUIDE_RU.md` уточнена.
+- Canonical Voice Lab workflow сохраняет quality defaults только через Runtime Settings; Server использует Backend Default, а Synthesize наследует backend model/settings и edge silence sentinel values. Consent/overwrite остаются выключенными.
+- Удалён новый фиктивный `legacy` chunking mode, отсутствовавший в `main`; backend/API/ComfyUI оставляют только `semantic` и `off`.
+- Targeted validation: 15 tests passed; canonical workflow JSON valid; `git diff --check` clean. GPU/model smoke, benchmark и screenshots не выполнялись.

@@ -39,7 +39,7 @@ BACKEND_DEFAULT = "Use Backend Default"
 GENERATION_PRESET_OPTIONS = (BACKEND_DEFAULT, "Default", "Stable Russian")
 NORMALIZATION_OPTIONS = (BACKEND_DEFAULT, "Off", "Basic Russian", "Full Russian")
 MULTILINGUAL_OPTIONS = (BACKEND_DEFAULT, "Auto Russian + English", "Off (Russian only)")
-CHUNKING_OPTIONS = (BACKEND_DEFAULT, "Semantic / prosody-aware", "Legacy", "Off")
+CHUNKING_OPTIONS = (BACKEND_DEFAULT, "Semantic / prosody-aware", "Off")
 ALLOWED_STYLES = (
     "neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense", "pleasure", "intimate"
 )
@@ -182,7 +182,7 @@ def _multilingual_mode(value: str) -> str | None:
 
 
 def _chunking_mode(value: str) -> str | None:
-    return {BACKEND_DEFAULT: None, "Semantic / prosody-aware": "semantic", "Legacy": "legacy", "Off": "off"}.get(value, value)
+    return {BACKEND_DEFAULT: None, "Semantic / prosody-aware": "semantic", "Off": "off"}.get(value, value)
 
 
 def _pronunciation_overrides(value: str) -> dict[str, str]:
@@ -305,7 +305,7 @@ class QwenTTSRuntimeSettingsNode:
                 "generation_preset": (["Default", "Stable Russian"], {"default": "Stable Russian"}),
                 "russian_normalization": (["Off", "Basic Russian", "Full Russian"], {"default": "Full Russian"}),
                 "multilingual_mode": (["Auto Russian + English", "Off (Russian only)"], {"default": "Auto Russian + English"}),
-                "chunking_mode": (["Semantic / prosody-aware", "Legacy", "Off"], {"default": "Semantic / prosody-aware"}),
+                "chunking_mode": (["Semantic / prosody-aware", "Off"], {"default": "Semantic / prosody-aware"}),
                 "leading_silence_ms": ("INT", {"default": 100, "min": 0, "max": 2000}),
                 "trailing_silence_ms": ("INT", {"default": 150, "min": 0, "max": 2000}),
             },
