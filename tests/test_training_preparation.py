@@ -9,7 +9,7 @@ import torch
 from training.russian_adaptation.common import PACKAGE_DIR, load_plan, ordinary_text
 from training.russian_adaptation.dataset import RussianAdaptationDataset
 from training.russian_adaptation.prepare_codes import encode_manifest
-from training.russian_adaptation.prepare_dataset import Candidate, row_is_eligible, select_candidates
+from training.russian_adaptation.prepare_dataset import Candidate, _features, row_is_eligible, select_candidates
 
 
 def _metadata(index: int) -> dict:
@@ -56,7 +56,12 @@ def test_plan_is_conservative_and_keeps_base_outputs_separate() -> None:
     assert plan["training"]["precision"] == "fp16"
     assert plan["training"]["attention"] == "sdpa"
     assert set(plan["models"]) == {"0.6b", "1.7b"}
+    assert plan["tokenizer"]["revision"] == "7dd38ad4e9bad454aae9cd937d0cd577604fe229"
+    assert plan["models"]["0.6b"]["revision"] == "5d83992436eae1d760afd27aff78a71d676296fc"
+    assert plan["models"]["1.7b"]["revision"] == "fd4b254389122332181a7c3db7f27e918eec64e3"
     for spec in plan["models"].values():
+        assert len(spec["revision"]) == 40
+        assert set(spec["revision"]) <= set("0123456789abcdef")
         assert spec["repo_id"].endswith("-Base")
         assert spec["expected_tts_model_type"] == "base"
         assert spec["output_dir"].startswith("trained_models/")
@@ -69,6 +74,30 @@ def test_filter_uses_plain_punctuation_text_not_accent_hacks() -> None:
     assert "+" in metadata["accent"]
     assert "+" not in ordinary_text(metadata)
     assert row_is_eligible(metadata, plan["dataset"]["filters"])
+
+
+def test_stress_annotations_affect_selection_features_only() -> None:
+    first = _candidate(0)
+    second_metadata = {**first.metadata, "accent": "Он+а в+ыразительно произнесл+а тестовую фр+азу н+омер н+оль."}
+    second = Candidate(**{**first.__dict__, "metadata": second_metadata, "item_id": "stress-variant"})
+    first_stress = {feature for feature in _features(first) if feature.startswith("s:")}
+    second_stress = {feature for feature in _features(second) if feature.startswith("s:")}
+    assert first_stress
+    assert first_stress != second_stress
+    assert ordinary_text(first.metadata) == ordinary_text(second.metadata)
+    assert "+" not in ordinary_text(second.metadata)
+
+
+def test_pinned_revisions_are_forwarded_to_all_hugging_face_loads() -> None:
+    training_root = PACKAGE_DIR
+    prepare_codes = (training_root / "prepare_codes.py").read_text(encoding="utf-8")
+    train_lora = (training_root / "train_lora.py").read_text(encoding="utf-8")
+    validate = (training_root / "validate.py").read_text(encoding="utf-8")
+    assert prepare_codes.count('revision=tokenizer_config["revision"]') == 2
+    assert 'Qwen3TTSTokenizer.from_pretrained(\n        str(tokenizer_snapshot)' in prepare_codes
+    assert train_lora.count('revision=model_spec["revision"]') == 2
+    assert 'Qwen3TTSModel.from_pretrained(\n        str(base_snapshot)' in train_lora
+    assert 'revision=spec["revision"]' in validate
 
 
 def test_diverse_selection_is_deterministic_without_fake_speaker_pairing() -> None:

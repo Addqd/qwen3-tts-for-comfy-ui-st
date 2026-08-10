@@ -237,8 +237,16 @@ def train(model_key: str) -> dict[str, Any]:
     resume_root = output_root / "resume"
     resume_checkpoint = latest_resume_checkpoint(resume_root)
 
+    base_snapshot = Path(
+        snapshot_download(
+            repo_id=model_spec["repo_id"],
+            revision=model_spec["revision"],
+            cache_dir=project_path("model_cache"),
+        )
+    )
     wrapper = Qwen3TTSModel.from_pretrained(
-        model_spec["repo_id"],
+        str(base_snapshot),
+        revision=model_spec["revision"],
         cache_dir=project_path("model_cache"),
         torch_dtype=torch.float16,
         attn_implementation="sdpa",
@@ -357,9 +365,6 @@ def train(model_key: str) -> dict[str, Any]:
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         accelerator.unwrap_model(model).adapter_model.save_pretrained(final_adapter, safe_serialization=True)
-    base_snapshot = Path(
-        snapshot_download(repo_id=model_spec["repo_id"], cache_dir=project_path("model_cache"), local_files_only=True)
-    )
     final_checkpoint = save_final_checkpoint(accelerator, model, base_snapshot, output_root, model_spec)
     result = {
         "status": "success",

@@ -26,21 +26,24 @@ FORBIDDEN_TARGET_PARTS = (
 )
 
 
-def _cached_model_path(repo_id: str) -> Path | None:
+def _cached_model_path(repo_id: str, revision: str) -> Path | None:
     snapshots = project_path("model_cache") / f"models--{repo_id.replace('/', '--')}" / "snapshots"
-    if not snapshots.is_dir():
-        return None
-    matches = sorted(path for path in snapshots.iterdir() if (path / "config.json").is_file())
-    return matches[-1] if matches else None
+    pinned = snapshots / revision
+    return pinned if (pinned / "config.json").is_file() else None
 
 
 def validate_model(model_key: str, spec: dict[str, Any], pattern: re.Pattern[str], local_only: bool) -> dict[str, Any]:
-    cached = _cached_model_path(spec["repo_id"])
+    cached = _cached_model_path(spec["repo_id"], spec["revision"])
     if local_only and cached is None:
         raise FileNotFoundError(f"No local snapshot for {spec['repo_id']}")
     source: str | Path = cached or spec["repo_id"]
     AutoConfig.register("qwen3_tts", Qwen3TTSConfig)
-    config = AutoConfig.from_pretrained(source, cache_dir=project_path("model_cache"), local_files_only=local_only)
+    config = AutoConfig.from_pretrained(
+        source,
+        revision=spec["revision"],
+        cache_dir=project_path("model_cache"),
+        local_files_only=local_only,
+    )
     checks = {
         "tts_model_type": getattr(config, "tts_model_type", None),
         "tts_model_size": getattr(config, "tts_model_size", None),

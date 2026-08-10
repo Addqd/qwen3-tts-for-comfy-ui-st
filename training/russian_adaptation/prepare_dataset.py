@@ -113,9 +113,29 @@ def _features(candidate: Candidate) -> set[str]:
     endings = {f"e:{word[-3:]}" for word in normalized.split() if len(word) >= 3}
     phonemes = str(candidate.metadata.get("rover_phonemes") or "").split()
     phone_bigrams = {f"p:{left}>{right}" for left, right in zip(phonemes, phonemes[1:])}
+    stress_features: set[str] = set()
+    vowels = "аеёиоуыэюя"
+    for accented_word in re.findall(r"[а-яё+]+", str(candidate.metadata.get("accent") or "").lower()):
+        marker = accented_word.find("+")
+        if marker < 0 or marker + 1 >= len(accented_word):
+            continue
+        plain_word = accented_word.replace("+", "")
+        stressed_vowel = accented_word[marker + 1]
+        stressed_position = marker
+        if stressed_vowel not in vowels:
+            continue
+        syllable_count = sum(character in vowels for character in plain_word)
+        stressed_syllable = sum(character in vowels for character in plain_word[:stressed_position])
+        stress_features.update(
+            {
+                f"s:vowel:{stressed_vowel}",
+                f"s:position:{min(stressed_syllable, 5)}-of-{min(syllable_count, 6)}",
+                f"s:ending:{plain_word[-3:]}:{min(stressed_syllable, 5)}",
+            }
+        )
     punctuation = {f"u:{mark}" for mark in "?!—,:" if mark in candidate.text}
     length_bucket = {f"l:{min(len(candidate.text.split()) // 4, 8)}"}
-    return char_trigrams | endings | phone_bigrams | punctuation | length_bucket
+    return char_trigrams | endings | phone_bigrams | stress_features | punctuation | length_bucket
 
 
 def select_candidates(

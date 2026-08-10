@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from huggingface_hub import snapshot_download
 
 from training.russian_adaptation.common import iter_jsonl, load_plan, project_path, write_jsonl_atomic
 
@@ -63,8 +64,14 @@ def main() -> int:
 
     from qwen_tts.inference.qwen3_tts_tokenizer import Qwen3TTSTokenizer
 
+    tokenizer_snapshot = snapshot_download(
+        repo_id=tokenizer_config["repo_id"],
+        revision=tokenizer_config["revision"],
+        cache_dir=project_path("model_cache"),
+    )
     tokenizer = Qwen3TTSTokenizer.from_pretrained(
-        tokenizer_config["repo_id"],
+        str(tokenizer_snapshot),
+        revision=tokenizer_config["revision"],
         cache_dir=project_path("model_cache"),
         device_map="cuda:0",
         torch_dtype=torch.float16,
