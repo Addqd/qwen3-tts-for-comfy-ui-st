@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import Accelerator
-from huggingface_hub import snapshot_download
+from huggingface_hub import save_torch_model, snapshot_download
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -328,12 +328,48 @@ def copy_non_weight_assets(source: Path, destination: Path) -> None:
             shutil.copy2(path, target)
 
 
+def write_full_model_config(model: nn.Module, base_config_path: Path, destination: Path) -> dict[str, Any]:
+    with base_config_path.open("r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    for name in ("tts_model_type", "tts_model_size"):
+        merged_value = getattr(model.config, name, None)
+        if merged_value is not None and config.get(name) != merged_value:
+            raise RuntimeError(f"Merged model changed pinned Base config field {name}")
+    parameter = next(model.parameters(), None)
+    config["dtype"] = str(parameter.dtype if parameter is not None else torch.float32).removeprefix("torch.")
+    config["architectures"] = [model.__class__.__name__]
+    write_json_atomic(destination / "config.json", config)
+    return config
+
+
+def save_merged_model_files(
+    model: nn.Module, base_config_path: Path, destination: Path, max_shard_size: str = "2GB"
+) -> None:
+    save_torch_model(
+        model,
+        destination,
+        filename_pattern="model{suffix}.safetensors",
+        max_shard_size=max_shard_size,
+        safe_serialization=True,
+        metadata={"format": "pt"},
+        shared_tensors_to_discard=getattr(model, "_tied_weights_keys", None),
+    )
+    write_full_model_config(model, base_config_path, destination)
+
+
 def validate_final_checkpoint_structure(base_snapshot: Path, checkpoint: Path) -> None:
     root_weights = [
         path for path in checkpoint.iterdir() if path.is_file() and ROOT_MODEL_WEIGHT_PATTERN.fullmatch(path.name)
     ]
     if not root_weights:
         raise RuntimeError("Final checkpoint has no root model weights")
+    config_path = checkpoint / "config.json"
+    if not config_path.is_file():
+        raise RuntimeError("Final checkpoint has no config.json")
+    with config_path.open("r", encoding="utf-8") as handle:
+        saved_config = json.load(handle)
+    if saved_config.get("tts_model_type") != "base":
+        raise RuntimeError("Saved checkpoint is not a Base voice-cloning model")
     source_speech_tokenizer = base_snapshot / "speech_tokenizer"
     if not source_speech_tokenizer.is_dir():
         raise RuntimeError("Pinned Base snapshot is missing the speech_tokenizer subtree")
@@ -345,6 +381,63 @@ def validate_final_checkpoint_structure(base_snapshot: Path, checkpoint: Path) -
         raise RuntimeError(f"Final checkpoint is missing required speech_tokenizer assets: {missing[:5]}")
     if not any(relative.name.endswith(ROOT_WEIGHT_SUFFIXES) for relative in required_files):
         raise RuntimeError("Pinned Base snapshot speech_tokenizer has no model weights")
+
+    required_assets = []
+    for path in base_snapshot.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(base_snapshot)
+        if relative.parent == Path(".") and ROOT_MODEL_WEIGHT_PATTERN.fullmatch(path.name):
+            continue
+        required_assets.append(relative)
+    missing_assets = [relative.as_posix() for relative in required_assets if not (checkpoint / relative).is_file()]
+    if missing_assets:
+        raise RuntimeError(f"Final checkpoint is missing required Base assets: {missing_assets[:5]}")
+
+
+def _archive_timestamp() -> str:
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+
+
+def prepare_finalization_directory(output_root: Path, recovery: bool) -> tuple[Path, Path]:
+    final_path = output_root / "checkpoint-epoch-1"
+    if final_path.exists():
+        raise FileExistsError(f"Refusing to overwrite existing final checkpoint: {final_path}")
+    temporary = output_root / ".checkpoint-epoch-1.incomplete"
+    if temporary.exists():
+        if not recovery:
+            raise FileExistsError(f"Preserved incomplete checkpoint requires inspection: {temporary}")
+        archived = output_root / f".checkpoint-epoch-1.failed-{_archive_timestamp()}"
+        temporary.replace(archived)
+    temporary.mkdir(parents=True)
+    return temporary, final_path
+
+
+def finalize_adapter_checkpoint(
+    adapter_model: PeftModel,
+    base_snapshot: Path,
+    output_root: Path,
+    model_spec: dict[str, Any],
+    recovery: bool = False,
+) -> Path:
+    temporary, final_path = prepare_finalization_directory(output_root, recovery)
+    copy_non_weight_assets(base_snapshot, temporary)
+
+    adapter_model.to("cpu")
+    base_model = adapter_model.get_base_model()
+    if hasattr(base_model, "talker") and hasattr(base_model.talker, "code_predictor"):
+        base_model.talker.code_predictor.to(dtype=torch.float16)
+    merged = adapter_model.merge_and_unload(safe_merge=True)
+    if getattr(merged.config, "tts_model_type", None) != "base":
+        raise RuntimeError("Merged checkpoint unexpectedly lost Base model type")
+    save_merged_model_files(merged, base_snapshot / "config.json", temporary)
+    with (temporary / "config.json").open("r", encoding="utf-8") as handle:
+        saved_config = json.load(handle)
+    if saved_config.get("tts_model_size") != model_spec["expected_tts_model_size"]:
+        raise RuntimeError("Saved checkpoint model size mismatch")
+    validate_final_checkpoint_structure(base_snapshot, temporary)
+    temporary.replace(final_path)
+    return final_path
 
 
 def save_final_checkpoint(
@@ -358,30 +451,8 @@ def save_final_checkpoint(
     final_path = output_root / "checkpoint-epoch-1"
     if not accelerator.is_main_process:
         return final_path
-    if final_path.exists():
-        raise FileExistsError(f"Refusing to overwrite incomplete final checkpoint: {final_path}")
-    temporary = output_root / ".checkpoint-epoch-1.incomplete"
-    if temporary.exists():
-        raise FileExistsError(f"Preserved incomplete checkpoint requires inspection: {temporary}")
-    temporary.mkdir(parents=True)
-    copy_non_weight_assets(base_snapshot, temporary)
-
     unwrapped = accelerator.unwrap_model(model)
-    unwrapped.adapter_model.to("cpu")
-    unwrapped.adapter_model.get_base_model().talker.code_predictor.to(dtype=torch.float16)
-    merged = unwrapped.adapter_model.merge_and_unload(safe_merge=True)
-    if getattr(merged.config, "tts_model_type", None) != "base":
-        raise RuntimeError("Merged checkpoint unexpectedly lost Base model type")
-    merged.save_pretrained(temporary, safe_serialization=True, max_shard_size="2GB")
-    with (temporary / "config.json").open("r", encoding="utf-8") as handle:
-        saved_config = json.load(handle)
-    if saved_config.get("tts_model_type") != "base":
-        raise RuntimeError("Saved checkpoint is not a Base voice-cloning model")
-    if saved_config.get("tts_model_size") != model_spec["expected_tts_model_size"]:
-        raise RuntimeError("Saved checkpoint model size mismatch")
-    validate_final_checkpoint_structure(base_snapshot, temporary)
-    temporary.replace(final_path)
-    return final_path
+    return finalize_adapter_checkpoint(unwrapped.adapter_model, base_snapshot, output_root, model_spec)
 
 
 def validate_cuda_training_state(accelerator: Accelerator, model: nn.Module, batch: dict[str, torch.Tensor]) -> None:
@@ -422,6 +493,155 @@ def advance_optimizer_step_if_applied(
     return optimizer_step + 1, True
 
 
+def load_pinned_base(model_spec: dict[str, Any]) -> tuple[Path, Qwen3TTSModel]:
+    base_snapshot = Path(
+        snapshot_download(
+            repo_id=model_spec["repo_id"],
+            revision=model_spec["revision"],
+            cache_dir=project_path("model_cache"),
+        )
+    )
+    wrapper = Qwen3TTSModel.from_pretrained(
+        str(base_snapshot),
+        revision=model_spec["revision"],
+        cache_dir=project_path("model_cache"),
+        torch_dtype=torch.float16,
+        attn_implementation="sdpa",
+        low_cpu_mem_usage=True,
+    )
+    if wrapper.model.config.tts_model_type != "base":
+        raise RuntimeError("Finalization requires an untouched Base checkpoint")
+    return base_snapshot, wrapper
+
+
+def load_completed_adapter(model_spec: dict[str, Any], final_adapter: Path) -> tuple[Path, PeftModel]:
+    base_snapshot, wrapper = load_pinned_base(model_spec)
+    freeze_base(wrapper.model)
+    adapter_model = PeftModel.from_pretrained(wrapper.model, final_adapter, is_trainable=False)
+    return base_snapshot, adapter_model
+
+
+def load_completed_evaluation(metrics_path: Path) -> dict[str, float]:
+    required = ("eval_loss", "eval_first_code_loss", "eval_subtalker_loss")
+    completed: dict[str, float] | None = None
+    if metrics_path.is_file():
+        for row in iter_jsonl(metrics_path):
+            if all(name in row for name in required):
+                candidate = {name: float(row[name]) for name in required}
+                if all(math.isfinite(value) for value in candidate.values()):
+                    completed = candidate
+    if completed is None:
+        raise RuntimeError(f"Finalize-only requires completed finite evaluation metrics in {metrics_path}")
+    return completed
+
+
+def count_manifest_rows(path: Path) -> int:
+    if not path.is_file():
+        raise FileNotFoundError(f"Required completed-run manifest is missing: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def failed_state_is_finalization(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    details = f"{state.get('error', '')}\n{state.get('traceback', '')}".lower()
+    return "save_final_checkpoint" in details or "final checkpoint finalization failed" in details
+
+
+def archive_failed_finalization(output_root: Path) -> Path | None:
+    failed_path = output_root / "FAILED.json"
+    if not failed_state_is_finalization(failed_path):
+        return None
+    archived = output_root / f"FAILED.finalization-{_archive_timestamp()}.json"
+    failed_path.replace(archived)
+    return archived
+
+
+def write_success_state(
+    output_root: Path,
+    model_key: str,
+    model_spec: dict[str, Any],
+    final_adapter: Path,
+    final_checkpoint: Path,
+    evaluation: dict[str, float],
+    train_samples: int,
+    eval_samples: int,
+    **extra: Any,
+) -> dict[str, Any]:
+    result = {
+        "status": "success",
+        "completed_at": utc_now(),
+        "model": model_key,
+        "base_model": model_spec["repo_id"],
+        "base_model_type_preserved": "base",
+        "epochs": 1,
+        "train_samples": train_samples,
+        "eval_samples": eval_samples,
+        "adapter": final_adapter.relative_to(PROJECT_ROOT).as_posix(),
+        "checkpoint": final_checkpoint.relative_to(PROJECT_ROOT).as_posix(),
+        "metrics": evaluation,
+        **extra,
+    }
+    archive_failed_finalization(output_root)
+    write_json_atomic(output_root / "SUCCESS.json", result)
+    return result
+
+
+def finalize_only(model_key: str) -> dict[str, Any]:
+    plan = load_plan()
+    model_spec = plan["models"][model_key]
+    output_root = project_path(model_spec["output_dir"])
+    output_root.mkdir(parents=True, exist_ok=True)
+    success_path = output_root / "SUCCESS.json"
+    if success_path.is_file():
+        with success_path.open("r", encoding="utf-8") as handle:
+            result = json.load(handle)
+        print(f"Already complete: {success_path}")
+        return result
+
+    final_adapter = output_root / "adapter-epoch-1"
+    required_adapter_files = (final_adapter / "adapter_config.json", final_adapter / "adapter_model.safetensors")
+    missing_adapter = [str(path) for path in required_adapter_files if not path.is_file()]
+    if missing_adapter:
+        raise RuntimeError(f"Finalize-only requires the completed adapter-epoch-1: missing {missing_adapter}")
+    evaluation = load_completed_evaluation(output_root / "training_metrics.jsonl")
+    manifest_dir = project_path("training_data/golos_balalaika/manifests")
+    train_samples = count_manifest_rows(manifest_dir / "train_with_codes.jsonl")
+    eval_samples = count_manifest_rows(manifest_dir / "eval_with_codes.jsonl")
+
+    base_snapshot, adapter_model = load_completed_adapter(model_spec, final_adapter)
+    final_checkpoint = finalize_adapter_checkpoint(
+        adapter_model,
+        base_snapshot,
+        output_root,
+        model_spec,
+        recovery=True,
+    )
+    return write_success_state(
+        output_root,
+        model_key,
+        model_spec,
+        final_adapter,
+        final_checkpoint,
+        evaluation,
+        train_samples,
+        eval_samples,
+        recovered_from_completed_adapter=True,
+    )
+
+
+def dispatch_training_command(model_key: str, finalize_only_mode: bool) -> dict[str, Any]:
+    if finalize_only_mode:
+        return finalize_only(model_key)
+    return train(model_key)
+
+
 def train(model_key: str) -> dict[str, Any]:
     plan = load_plan()
     training = plan["training"]
@@ -445,24 +665,8 @@ def train(model_key: str) -> dict[str, Any]:
     resume_root = output_root / "resume"
     resume_checkpoint = latest_resume_checkpoint(resume_root)
 
-    base_snapshot = Path(
-        snapshot_download(
-            repo_id=model_spec["repo_id"],
-            revision=model_spec["revision"],
-            cache_dir=project_path("model_cache"),
-        )
-    )
-    wrapper = Qwen3TTSModel.from_pretrained(
-        str(base_snapshot),
-        revision=model_spec["revision"],
-        cache_dir=project_path("model_cache"),
-        torch_dtype=torch.float16,
-        attn_implementation="sdpa",
-        low_cpu_mem_usage=True,
-    )
+    base_snapshot, wrapper = load_pinned_base(model_spec)
     core = wrapper.model
-    if core.config.tts_model_type != "base":
-        raise RuntimeError("Selective adaptation requires an untouched Base checkpoint")
     freeze_base(core)
     configure_subtalker_precision(core.talker)
 
@@ -600,47 +804,60 @@ def train(model_key: str) -> dict[str, Any]:
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         accelerator.unwrap_model(model).adapter_model.save_pretrained(final_adapter, safe_serialization=True)
-    final_checkpoint = save_final_checkpoint(accelerator, model, base_snapshot, output_root, model_spec)
-    result = {
-        "status": "success",
-        "completed_at": utc_now(),
-        "model": model_key,
-        "base_model": model_spec["repo_id"],
-        "base_model_type_preserved": "base",
-        "epochs": 1,
-        "train_samples": len(train_rows),
-        "eval_samples": len(eval_rows),
-        "adapter": final_adapter.relative_to(PROJECT_ROOT).as_posix(),
-        "checkpoint": final_checkpoint.relative_to(PROJECT_ROOT).as_posix(),
-        "metrics": evaluation,
-        **trainable_summary,
-    }
+    try:
+        final_checkpoint = save_final_checkpoint(accelerator, model, base_snapshot, output_root, model_spec)
+    except BaseException as exc:
+        raise RuntimeError(
+            f"Training and evaluation completed; adapter preserved at {final_adapter}, "
+            f"but final checkpoint finalization failed: {exc}"
+        ) from exc
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        write_json_atomic(success_path, result)
+        result = write_success_state(
+            output_root,
+            model_key,
+            model_spec,
+            final_adapter,
+            final_checkpoint,
+            evaluation,
+            len(train_rows),
+            len(eval_rows),
+            **trainable_summary,
+        )
+    else:
+        result = {}
     return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run conservative one-epoch Qwen3-TTS Base LoRA adaptation")
     parser.add_argument("--model-key", choices=("0.6b", "1.7b"), required=True)
+    parser.add_argument(
+        "--finalize-only",
+        action="store_true",
+        help="Finalize an existing adapter-epoch-1 without any training or optimizer steps",
+    )
     args = parser.parse_args()
     plan = load_plan()
     output_root = project_path(plan["models"][args.model_key]["output_dir"])
     try:
-        if not torch.cuda.is_available():
+        if not args.finalize_only and not torch.cuda.is_available():
             raise RuntimeError("CUDA is required for the user-run training step")
-        result = train(args.model_key)
+        result = dispatch_training_command(args.model_key, args.finalize_only)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except BaseException as exc:
         output_root.mkdir(parents=True, exist_ok=True)
+        failed_path = output_root / "FAILED.json"
+        if failed_path.exists():
+            failed_path.replace(output_root / f"FAILED.previous-{_archive_timestamp()}.json")
         write_json_atomic(
-            output_root / "FAILED.json",
+            failed_path,
             {
                 "status": "failed",
                 "failed_at": utc_now(),
                 "model": args.model_key,
+                "operation": "finalize-only" if args.finalize_only else "train",
                 "error_type": type(exc).__name__,
                 "error": str(exc),
                 "traceback": traceback.format_exc(),
