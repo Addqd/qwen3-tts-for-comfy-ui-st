@@ -22,6 +22,8 @@ SERVER_MODEL_OPTIONS = (
     "Backend Default (tts-1-ru)",
     "0.6B Fast (tts-1-ru-fast)",
     "1.7B Quality (tts-1-ru-quality)",
+    "0.6B Russian Tuned (tts-1-ru-fast-tuned)",
+    "1.7B Russian Tuned (tts-1-ru-quality-tuned)",
 )
 SYNTH_MODEL_OPTIONS = (INHERIT_SERVER_MODEL, *SERVER_MODEL_OPTIONS)
 # Compatibility for callers that imported the former public constant.
@@ -31,9 +33,13 @@ MODEL_ALIASES = {
     SERVER_MODEL_OPTIONS[0]: "tts-1-ru",
     SERVER_MODEL_OPTIONS[1]: "tts-1-ru-fast",
     SERVER_MODEL_OPTIONS[2]: "tts-1-ru-quality",
+    SERVER_MODEL_OPTIONS[3]: "tts-1-ru-fast-tuned",
+    SERVER_MODEL_OPTIONS[4]: "tts-1-ru-quality-tuned",
     "tts-1-ru": "tts-1-ru",
     "tts-1-ru-fast": "tts-1-ru-fast",
     "tts-1-ru-quality": "tts-1-ru-quality",
+    "tts-1-ru-fast-tuned": "tts-1-ru-fast-tuned",
+    "tts-1-ru-quality-tuned": "tts-1-ru-quality-tuned",
 }
 BACKEND_DEFAULT = "Use Backend Default"
 GENERATION_PRESET_OPTIONS = (BACKEND_DEFAULT, "Default", "Stable Russian")

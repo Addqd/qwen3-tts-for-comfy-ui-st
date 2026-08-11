@@ -40,6 +40,28 @@ models:
         minimum_free_vram_mb: 7600
         safety_reserve_mb: 750
         reject_shared_memory_pressure: true
+    qwen3-tts-0.6b-russian-tuned:
+      local_path: trained_models/qwen3-tts-0.6b-russian-tuned/checkpoint-epoch-1
+      aliases: [tts-1-ru-fast-tuned]
+      runtime:
+        mode: inherit
+        dtype: float32
+        attention: sdpa
+        max_new_tokens: 2048
+        minimum_free_vram_mb: 6000
+        safety_reserve_mb: 750
+        reject_shared_memory_pressure: true
+    qwen3-tts-1.7b-russian-tuned:
+      local_path: trained_models/qwen3-tts-1.7b-russian-tuned/checkpoint-epoch-1
+      aliases: [tts-1-ru-quality-tuned]
+      runtime:
+        mode: inherit
+        dtype: float32
+        attention: sdpa
+        max_new_tokens: 2048
+        minimum_free_vram_mb: 7600
+        safety_reserve_mb: 750
+        reject_shared_memory_pressure: true
 
 generation:
   presets:

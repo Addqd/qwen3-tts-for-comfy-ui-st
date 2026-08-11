@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -36,13 +37,40 @@ class RecordingWorker:
         self.loaded = False
 
 
-def test_registry_resolves_compatibility_fast_and_quality(tmp_path):
+def test_registry_resolves_original_and_tuned_models(tmp_path):
     registry = ModelRegistry(_config(tmp_path))
     assert registry.resolve("tts-1-ru").canonical == "qwen3-tts-0.6b"
-    assert registry.resolve("tts-1-ru-fast").hf_id.endswith("0.6B-Base")
-    assert registry.resolve("tts-1-ru-quality").hf_id.endswith("1.7B-Base")
+    assert registry.resolve("tts-1-ru-fast").hf_id == "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    assert registry.resolve("tts-1-ru-quality").hf_id == "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    assert Path(registry.resolve("tts-1-ru-fast-tuned").hf_id) == (
+        Path(__file__).parents[1] / "trained_models/qwen3-tts-0.6b-russian-tuned/checkpoint-epoch-1"
+    ).resolve()
+    assert Path(registry.resolve("tts-1-ru-quality-tuned").hf_id) == (
+        Path(__file__).parents[1] / "trained_models/qwen3-tts-1.7b-russian-tuned/checkpoint-epoch-1"
+    ).resolve()
+    assert registry.public_aliases() == [
+        "tts-1-ru",
+        "tts-1-ru-fast",
+        "tts-1-ru-quality",
+        "tts-1-ru-fast-tuned",
+        "tts-1-ru-quality-tuned",
+    ]
     with pytest.raises(ValueError, match="unknown-model"):
         registry.resolve("unknown-model")
+
+
+def test_missing_tuned_checkpoint_fails_only_when_selected(tmp_path):
+    config = _config(tmp_path)
+    config.data["models"]["available"]["qwen3-tts-0.6b-russian-tuned"]["local_path"] = str(
+        tmp_path / "missing-checkpoint"
+    )
+    manager = ModelManager(config, worker_factory=lambda *_: pytest.fail("worker must not be created"))
+
+    with pytest.raises(ModelActivationError, match="local tuned model checkpoint is unavailable") as error:
+        manager.prepare("tts-1-ru-fast-tuned")
+
+    assert "tts-1-ru-fast-tuned" in str(error.value)
+    assert str(tmp_path / "missing-checkpoint") in str(error.value)
 
 
 def test_manager_unloads_before_switch_and_reuses_same_model(tmp_path, monkeypatch):

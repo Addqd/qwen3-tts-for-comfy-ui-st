@@ -40,6 +40,8 @@ def test_endpoints_and_unicode_wav(tmp_path):
             "tts-1-ru",
             "tts-1-ru-fast",
             "tts-1-ru-quality",
+            "tts-1-ru-fast-tuned",
+            "tts-1-ru-quality-tuned",
         ]
         assert client.get("/v1/models").status_code == 200
         assert client.get("/v1/voices").json()["data"][0]["display_name"] == "TestNeutral"
@@ -59,6 +61,8 @@ def test_model_catalog_and_request_level_quality_controls(tmp_path):
             "tts-1-ru",
             "tts-1-ru-fast",
             "tts-1-ru-quality",
+            "tts-1-ru-fast-tuned",
+            "tts-1-ru-quality-tuned",
         ]
         response = client.post(
             "/v1/audio/speech",
@@ -81,6 +85,18 @@ def test_model_catalog_and_request_level_quality_controls(tmp_path):
         assert metrics["model_action"] == "switched"
         assert metrics["pronunciation_replacements"] == 1
         assert metrics["generation"][0]["generation_kwargs"]["temperature"] == 0.75
+
+
+def test_runtime_settings_accept_tuned_model_ids(tmp_path):
+    with TestClient(create_app(config=make_test_config(tmp_path))) as client:
+        settings = client.get("/admin/runtime-settings").json()["settings"]
+        for model_id in ("tts-1-ru-fast-tuned", "tts-1-ru-quality-tuned"):
+            response = client.put(
+                "/admin/runtime-settings",
+                json={**settings, "active_model": model_id},
+            )
+            assert response.status_code == 200, response.text
+            settings = response.json()["settings"]
 
 
 def test_unknown_model_is_clear_422_without_fallback(tmp_path):

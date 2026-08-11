@@ -113,6 +113,13 @@ class ModelManager:
                 self.active_activation = activation
                 return activation
 
+            local_path = resolved.spec.local_path
+            if local_path is not None and not local_path.is_dir():
+                raise ModelActivationError(
+                    "local tuned model checkpoint is unavailable; "
+                    f"requested={resolved.requested_alias}; path={local_path}"
+                )
+
             had_active = self.active_resolved is not None
             self._unload_locked()
             plan = self._plan(resolved)

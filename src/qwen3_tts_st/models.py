@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from .config import PROJECT_ROOT
 
 
 ALLOWED_DTYPES = frozenset({"auto", "float16", "float32"})
@@ -15,6 +18,7 @@ class ModelSpec:
     hf_id: str
     aliases: tuple[str, ...]
     runtime: dict[str, Any]
+    local_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -47,13 +51,20 @@ class ModelRegistry:
             value = raw_value or {}
             if not key or not isinstance(value, dict):
                 raise ValueError("models.available должен содержать mapping model-key -> config")
-            hf_id = str(value.get("hf_id", "")).strip()
-            if not hf_id:
-                raise ValueError(f"для модели {key} не задан hf_id")
+            local_value = str(value.get("local_path", "")).strip()
+            local_path = None
+            if local_value:
+                candidate = Path(local_value)
+                local_path = candidate.resolve() if candidate.is_absolute() else (PROJECT_ROOT / candidate).resolve()
+                hf_id = str(local_path)
+            else:
+                hf_id = str(value.get("hf_id", "")).strip()
+                if not hf_id:
+                    raise ValueError(f"для модели {key} не задан hf_id или local_path")
             aliases = tuple(str(item).strip() for item in value.get("aliases", []) if str(item).strip())
             runtime = dict(value.get("runtime", {}) or {})
             self._validate_runtime(key, runtime)
-            spec = ModelSpec(key=key, hf_id=hf_id, aliases=aliases, runtime=runtime)
+            spec = ModelSpec(key=key, hf_id=hf_id, aliases=aliases, runtime=runtime, local_path=local_path)
             self.specs[key] = spec
             self._register(key, spec)
             for alias in aliases:
