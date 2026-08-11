@@ -24,6 +24,7 @@ if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
     $OldProcess = Test-ComfyUIOwnedProcess -State $OldState
     if ($OldProcess) {
         if (Test-LocalHttp -Uri "$($OldState.url)/system_stats") {
+            Assert-QwenTTSCloneVoiceSchema -Url ([string]$OldState.url)
             Write-Host "ComfyUI is already running: $($OldState.url) (PID $($OldState.pid))"
             return
         }
@@ -31,6 +32,9 @@ if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
     }
 }
 if (Test-LocalPortInUse -Port ([int]$Settings.port)) { throw "Port $($Settings.port) is already in use; no process was stopped." }
+
+& (Join-Path $script:ProjectRoot "integrations\comfyui\install.ps1") `
+    -ComfyUIPath $Root -Mode Junction -Synchronize -Confirm:$false
 
 $Runtime = Join-Path $script:ProjectRoot "runtime"
 $LogDirectory = Split-Path -Parent ([string]$Settings.log_path)
@@ -84,6 +88,15 @@ if (-not $Ready) {
     $Owned = Test-ComfyUIOwnedProcess -State $State
     if ($Owned) { Stop-Process -Id $Owned.Id }
     throw "ComfyUI did not become ready within $Timeout seconds."
+}
+try {
+    Assert-QwenTTSCloneVoiceSchema -Url ([string]$State.url)
+} catch {
+    $SchemaFailure = $_
+    $Owned = Test-ComfyUIOwnedProcess -State $State
+    if ($Owned) { Stop-Process -Id $Owned.Id }
+    if (Test-Path -LiteralPath $script:ComfyUIStatePath) { Remove-Item -LiteralPath $script:ComfyUIStatePath }
+    throw $SchemaFailure
 }
 Write-Host "ComfyUI: $($State.url)"
 Write-Host "PID: $($State.pid); Manager: $Manager; console visible: $(-not $Hidden)"

@@ -105,6 +105,7 @@ if ($WaitForComfyUIExit -and -not $VisibleComfyUIConsole) {
 
 try {
     if (Test-LocalHttp -Uri "$ComfyUrl/system_stats") {
+        Assert-QwenTTSCloneVoiceSchema -Url $ComfyUrl
         Write-Host "ComfyUI is already ready: $ComfyUrl"
         if ($WaitForComfyUIExit) {
             if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
