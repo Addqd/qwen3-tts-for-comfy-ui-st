@@ -4,7 +4,7 @@ import html
 import re
 from dataclasses import dataclass
 
-from .emotion import ALLOWED_STYLES
+from .emotion import ALLOWED_STYLES, SOUND_TYPES
 
 
 THINK_RE = re.compile(r"<(?:think|reasoning)>.*?</(?:think|reasoning)>", re.I | re.S)
@@ -36,14 +36,18 @@ BOUNDARY_PATTERNS = (
 
 def _direct_speech(text: str) -> str:
     pattern = re.compile(
-        r"(?:(\[voice:[a-z][a-z0-9_-]*\])\s*)?"
-        r'(?:"((?:\\.|[^"\\])*)"|«([^»]+)»|“([^”]+)”)',
+        r"(?P<sound>\[sound:(?:" + "|".join(map(re.escape, SOUND_TYPES)) + r")\])|"
+        r"(?:(?P<voice>\[voice:[a-z][a-z0-9_-]*\])\s*)?"
+        r'(?:"(?P<ascii>(?:\\.|[^"\\])*)"|«(?P<angle>[^»]+)»|“(?P<curly>[^”]+)”)',
         re.I | re.S,
     )
     blocks = []
     for match in pattern.finditer(text):
-        tag = match.group(1)
-        spoken = next(value for value in match.groups()[1:] if value is not None)
+        if match.group("sound"):
+            blocks.append(match.group("sound"))
+            continue
+        tag = match.group("voice")
+        spoken = next(match.group(name) for name in ("ascii", "angle", "curly") if match.group(name) is not None)
         blocks.append(f"{tag + ' ' if tag else ''}\"{spoken}\"")
     return "\n".join(blocks)
 

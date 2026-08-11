@@ -12,12 +12,15 @@ def test_preprocess_removes_private_blocks_and_markup():
 
 
 def test_direct_speech_and_emotion_tags():
-    text = 'Автор сказал: [voice:happy] **"Ах, привет!"** Затем ушёл.'
+    text = 'Автор сказал: [voice:happy] **"Ах, привет!"** [sound:giggle] Затем ушёл.'
     prepared = preprocess(text, {"remove_markdown": True}, "direct_speech")
     segments = parse_emotion_script(prepared)
     assert segments[0].kind == "dialogue"
     assert segments[0].style == "happy"
     assert segments[0].text == "Ах, привет!"
+    assert segments[1].kind == "sound"
+    assert segments[1].sound_type == "giggle"
+    assert segments[1].preferred_style == "happy"
     assert "voice:" not in strip_voice_tags(prepared)
 
 

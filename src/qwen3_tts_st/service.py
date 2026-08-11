@@ -10,7 +10,7 @@ from typing import Any
 
 import soundfile as sf
 
-from .audio import change_speed, encode, fade_edges, pad_edges, stitch
+from .audio import AudioPart, change_speed, encode, fade_edges, pad_edges, stitch
 from .emotion import parse_emotion_script_detailed
 from .generation import generation_kwargs
 from .model_manager import ModelActivation, ModelManager
@@ -183,7 +183,7 @@ class TTSService:
                 getattr(request, "pronunciation_overrides", None),
             )
             yo_dictionary = self.config.get("normalization.yo_dictionary", {}) or {}
-            parts = []
+            parts: list[AudioPart] = []
             all_metrics = []
             selected_voices = []
             generation_voices = []
@@ -191,7 +191,61 @@ class TTSService:
             pronunciation_replacements = 0
             activation: ModelActivation = self.manager.prepare(effective_model)
             max_chars = int(self.config.get("chunking.max_chars", 320))
+
+            async def generate_piece(piece_text, profile, language, segment_kind):
+                if activation.mode == "cuda_on_demand" and not isinstance(activation.worker, MockWorker):
+                    waveform, sample_rate, metrics = await self._on_demand(
+                        piece_text,
+                        profile.voice_id,
+                        language,
+                        effective_model,
+                        generation_preset,
+                    )
+                else:
+                    waveform, sample_rate, metrics = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            self.manager.synthesize_prepared,
+                            activation,
+                            piece_text,
+                            profile,
+                            language,
+                            generate,
+                        ),
+                        timeout=float(self.config.get("queue.generation_timeout_seconds", 900)),
+                    )
+                metrics.update(activation.metadata())
+                metrics["generation_preset"] = generation_preset
+                metrics["language"] = language
+                metrics["voice"] = profile.voice_id
+                metrics["performance_kind"] = segment_kind
+                parts.append(AudioPart(waveform, sample_rate, segment_kind, profile.profile_id))
+                all_metrics.append(metrics)
+                generation_voices.append(profile.voice_id)
+                languages.append(language)
+
             for segment in segments:
+                if segment.kind == "sound":
+                    profile = self.library.find_sound(
+                        base.character,
+                        str(segment.sound_type),
+                        segment.preferred_style,
+                    )
+                    if profile is None:
+                        router_warnings.append(f"missing_sound_profile:{segment.sound_type}")
+                        continue
+                    carrier = str(
+                        self.config.get(
+                            f"performance.sound_carriers.{segment.sound_type}",
+                            "",
+                        )
+                    ).strip()
+                    if not carrier:
+                        router_warnings.append(f"missing_sound_carrier:{segment.sound_type}")
+                        continue
+                    selected_voices.append(profile.voice_id)
+                    await generate_piece(carrier, profile, "Russian", "sound")
+                    continue
+
                 profile = self.library.find_style(base.character, segment.style, base)
                 selected_voices.append(profile.voice_id)
                 pronounced, replacements = apply_pronunciation(segment.text, pronunciation)
@@ -201,38 +255,17 @@ class TTSService:
                         span_text = language_span.text
                         if language_span.language == "Russian":
                             span_text = normalize_russian_text(span_text, normalize_mode, yo_dictionary)
-                        if activation.mode == "cuda_on_demand" and not isinstance(activation.worker, MockWorker):
-                            waveform, sample_rate, metrics = await self._on_demand(
-                                span_text,
-                                profile.voice_id,
-                                language_span.language,
-                                effective_model,
-                                generation_preset,
-                            )
-                        else:
-                            waveform, sample_rate, metrics = await asyncio.wait_for(
-                                asyncio.to_thread(
-                                    self.manager.synthesize_prepared,
-                                    activation,
-                                    span_text,
-                                    profile,
-                                    language_span.language,
-                                    generate,
-                                ),
-                                timeout=float(self.config.get("queue.generation_timeout_seconds", 900)),
-                            )
-                        metrics.update(activation.metadata())
-                        metrics["generation_preset"] = generation_preset
-                        metrics["language"] = language_span.language
-                        metrics["voice"] = profile.voice_id
-                        parts.append((waveform, sample_rate))
-                        all_metrics.append(metrics)
-                        generation_voices.append(profile.voice_id)
-                        languages.append(language_span.language)
+                        await generate_piece(span_text, profile, language_span.language, "speech")
+            router_warnings = list(dict.fromkeys(router_warnings))
+            if not parts:
+                raise ValueError("performance не создал ни одного аудиосегмента")
             waveform, sample_rate = stitch(
                 parts,
                 crossfade_ms=int(self.config.get("pauses.crossfade_ms", 8)),
+                boundary_config=dict(self.config.get("performance.boundaries", {}) or {}),
             )
+            if not waveform.size:
+                raise ValueError("boundary pipeline вернул пустое итоговое аудио")
             waveform = change_speed(waveform, request.speed)
             waveform = fade_edges(waveform, sample_rate, int(self.config.get("pauses.edge_fade_ms", 5)))
             waveform = pad_edges(waveform, sample_rate, leading_silence_ms, trailing_silence_ms)
@@ -244,6 +277,7 @@ class TTSService:
                 "segments": len(parts),
                 "styles": [segment.style for segment in segments],
                 "segment_types": [segment.kind for segment in segments],
+                "sound_types": [segment.sound_type for segment in segments if segment.kind == "sound"],
                 "voices": selected_voices,
                 "generation_voices": generation_voices,
                 "router_warnings": router_warnings,

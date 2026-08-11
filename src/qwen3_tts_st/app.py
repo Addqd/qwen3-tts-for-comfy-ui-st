@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 from .config import AppConfig, load_config
-from .emotion import VoiceStyle
+from .emotion import SoundType, VoiceStyle
 from .normalization import parse_pronunciation_overrides
 from .service import TTSService
 
@@ -71,6 +71,9 @@ class CloneRequest(BaseModel):
     profile_name: str
     character_name: str
     style: VoiceStyle = "neutral"
+    emotion_enabled: bool = True
+    sound_enabled: bool = False
+    sounds: list[SoundType] = Field(default_factory=list)
     language: str = "Russian"
     clone_mode: Literal["icl", "x_vector"] = "icl"
     overwrite: bool = False
@@ -160,6 +163,10 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
                     "profile_id": request.profile_name,
                     "display_name": request.profile_name,
                     "style": request.style,
+                    "emotion_enabled": request.emotion_enabled,
+                    "emotion": request.style,
+                    "sound_enabled": request.sound_enabled,
+                    "sounds": request.sounds,
                     "ref_text": request.ref_text,
                     "language": request.language,
                     "clone_mode": request.clone_mode,

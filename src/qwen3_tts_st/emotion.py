@@ -18,6 +18,9 @@ VoiceStyle = Literal[
     "intimate",
 ]
 ALLOWED_STYLES = frozenset(get_args(VoiceStyle))
+SoundType = Literal["laugh", "giggle", "gasp", "sigh", "pant", "moan"]
+SOUND_TYPES = tuple(get_args(SoundType))
+ALLOWED_SOUNDS = frozenset(SOUND_TYPES)
 
 # The machine contract is intentionally strict: [voice:style]. A broader
 # service-tag matcher removes malformed variants as well, so they can never be
@@ -31,6 +34,15 @@ UNTERMINATED_TAG_RE = re.compile(
     r"\[\s*voice(?=\s|:)(?:\s*:\s*|\s+)[a-z0-9_-]*",
     re.I,
 )
+SOUND_TAG_RE = re.compile(r"\[sound:([a-z][a-z0-9_-]*)\]", re.I)
+SOUND_SERVICE_TAG_RE = re.compile(
+    r"\[\s*sound(?=\s|:|\])(?:\s*:\s*|\s+)?([^\]\r\n]*)\]",
+    re.I,
+)
+UNTERMINATED_SOUND_TAG_RE = re.compile(
+    r"\[\s*sound(?=\s|:)(?:\s*:\s*|\s+)[a-z0-9_-]*",
+    re.I,
+)
 
 
 @dataclass
@@ -38,9 +50,11 @@ class EmotionSegment:
     style: str
     text: str
     kind: str = "narration"
+    sound_type: str | None = None
+    preferred_style: str | None = None
 
     def to_dict(self) -> dict[str, str]:
-        return asdict(self)
+        return {key: value for key, value in asdict(self).items() if value is not None}
 
 
 @dataclass(frozen=True)
@@ -48,6 +62,7 @@ class _Token:
     kind: str
     text: str = ""
     style: str = "neutral"
+    sound_type: str = ""
     warnings: tuple[str, ...] = ()
 
 
@@ -72,17 +87,27 @@ def _tag_token(text: str, position: int) -> tuple[int, _Token] | None:
     if strict:
         requested = strict.group(1).lower()
         if requested in ALLOWED_STYLES:
-            return strict.end(), _Token("tag", style=requested)
+            return strict.end(), _Token("voice_tag", style=requested)
         return strict.end(), _Token(
-            "tag",
+            "voice_tag",
             style="neutral",
             warnings=("unknown_voice_tag_neutral_fallback",),
+        )
+
+    sound = SOUND_TAG_RE.match(text, position)
+    if sound:
+        requested = sound.group(1).lower()
+        if requested in ALLOWED_SOUNDS:
+            return sound.end(), _Token("sound", sound_type=requested)
+        return sound.end(), _Token(
+            "service",
+            warnings=(f"unknown_sound_tag_removed:{requested}",),
         )
 
     malformed = SERVICE_TAG_RE.match(text, position)
     if malformed:
         return malformed.end(), _Token(
-            "tag",
+            "voice_tag",
             style="neutral",
             warnings=("malformed_voice_tag_neutral_fallback",),
         )
@@ -90,9 +115,22 @@ def _tag_token(text: str, position: int) -> tuple[int, _Token] | None:
     unterminated = UNTERMINATED_TAG_RE.match(text, position)
     if unterminated:
         return unterminated.end(), _Token(
-            "tag",
+            "voice_tag",
             style="neutral",
             warnings=("unterminated_voice_tag_removed",),
+        )
+    malformed_sound = SOUND_SERVICE_TAG_RE.match(text, position)
+    if malformed_sound:
+        return malformed_sound.end(), _Token(
+            "service",
+            warnings=("malformed_sound_tag_removed",),
+        )
+
+    unterminated_sound = UNTERMINATED_SOUND_TAG_RE.match(text, position)
+    if unterminated_sound:
+        return unterminated_sound.end(), _Token(
+            "service",
+            warnings=("unterminated_sound_tag_removed",),
         )
     return None
 
@@ -136,10 +174,12 @@ def _tokens(text: str) -> Iterator[_Token]:
 
 
 def strip_voice_tags(text: str) -> str:
-    """Remove recognized, unknown, malformed, and unterminated voice tags."""
+    """Compatibility helper removing all backend performance service tags."""
 
     value = SERVICE_TAG_RE.sub("", text)
     value = UNTERMINATED_TAG_RE.sub("", value)
+    value = SOUND_SERVICE_TAG_RE.sub("", value)
+    value = UNTERMINATED_SOUND_TAG_RE.sub("", value)
     return value.strip()
 
 
@@ -151,7 +191,7 @@ def _append_segment(segments: list[EmotionSegment], style: str, text: str, kind:
     clean = _clean_spoken_text(text)
     if not clean:
         return
-    if kind == "narration" and segments and segments[-1].style == style and segments[-1].kind == kind:
+    if kind in {"narration", "dialogue"} and segments and segments[-1].style == style and segments[-1].kind == kind:
         segments[-1].text = f"{segments[-1].text} {clean}".strip()
         return
     segments.append(EmotionSegment(style=style, text=clean, kind=kind))
@@ -175,10 +215,22 @@ def parse_emotion_script_detailed(text: str) -> tuple[list[EmotionSegment], list
 
     for token in _tokens(text):
         warnings.extend(token.warnings)
-        if token.kind == "tag":
+        if token.kind == "voice_tag":
             if pending_style is not None:
                 warnings.append("multiple_voice_tags_last_wins")
             pending_style = token.style
+            continue
+        if token.kind == "sound":
+            segments.append(
+                EmotionSegment(
+                    style="neutral",
+                    text="",
+                    kind="sound",
+                    sound_type=token.sound_type,
+                )
+            )
+            continue
+        if token.kind == "service":
             continue
 
         if token.kind == "dialogue":
@@ -199,6 +251,16 @@ def parse_emotion_script_detailed(text: str) -> tuple[list[EmotionSegment], list
 
     if pending_style is not None:
         warnings.append("voice_tag_ignored_no_following_quoted_dialogue")
+
+    for index, segment in enumerate(segments):
+        if segment.kind != "sound":
+            continue
+        previous = next((item for item in reversed(segments[:index]) if item.kind != "sound"), None)
+        following = next((item for item in segments[index + 1 :] if item.kind != "sound"), None)
+        context = previous or following
+        if context is not None:
+            segment.style = context.style
+            segment.preferred_style = context.style
 
     # Stable ordering without repeated log noise; warnings contain no user text.
     warnings = list(dict.fromkeys(warnings))

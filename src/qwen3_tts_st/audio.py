@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import io
 import subprocess
+from typing import Any
 
 import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
+
+
+@dataclass(frozen=True, eq=False)
+class AudioPart:
+    waveform: np.ndarray
+    sample_rate: int
+    kind: str = "speech"
+    profile_id: str = ""
 
 
 def normalize_waveform(waveform: np.ndarray) -> np.ndarray:
@@ -24,27 +34,105 @@ def resample(waveform: np.ndarray, source_rate: int, target_rate: int) -> np.nda
     return resample_poly(normalize_waveform(waveform), target_rate // divisor, source_rate // divisor).astype(np.float32)
 
 
-def stitch(parts: list[tuple[np.ndarray, int]], crossfade_ms: int = 8) -> tuple[np.ndarray, int]:
-    """Join internal synthesis parts without inserting artificial silence."""
+def _coerce_part(part: tuple[np.ndarray, int] | AudioPart) -> AudioPart:
+    return part if isinstance(part, AudioPart) else AudioPart(part[0], part[1])
+
+
+def _clean_internal_edges(waveform: np.ndarray, sample_rate: int, config: dict[str, Any]) -> np.ndarray:
+    value = normalize_waveform(waveform).copy()
+    dc_threshold = float(config.get("dc_offset_threshold", 0.01))
+    offset = float(np.mean(value)) if len(value) else 0.0
+    if abs(offset) >= dc_threshold:
+        value = value - offset
+
+    window = min(len(value), max(0, int(sample_rate * float(config.get("edge_window_ms", 40)) / 1000)))
+    if not window:
+        return normalize_waveform(value)
+    threshold = float(config.get("edge_silence_threshold", 0.0025))
+    minimum = max(1, int(sample_rate * float(config.get("edge_min_silence_ms", 12)) / 1000))
+    safety = max(0, int(sample_rate * float(config.get("edge_safety_ms", 4)) / 1000))
+    start = 0
+    leading_activity = np.flatnonzero(np.abs(value[:window]) > threshold)
+    if leading_activity.size:
+        if int(leading_activity[0]) >= minimum:
+            start = max(0, int(leading_activity[0]) - safety)
+    else:
+        start = min(len(value), max(0, window - safety))
+    end = len(value)
+    trailing_activity = np.flatnonzero(np.abs(value[-window:]) > threshold)
+    if trailing_activity.size:
+        trailing = window - 1 - int(trailing_activity[-1])
+        if trailing >= minimum:
+            end = min(len(value), len(value) - trailing + safety)
+    else:
+        end = max(0, len(value) - window + safety)
+    if start >= end:
+        return np.zeros(0, dtype=np.float32)
+    return normalize_waveform(value[start:end])
+
+
+def _transition_key(left: AudioPart, right: AudioPart) -> str:
+    if left.kind == "speech" and right.kind == "speech":
+        return "same_profile_speech" if left.profile_id and left.profile_id == right.profile_id else "different_emotion_speech"
+    if left.kind == "speech" and right.kind == "sound":
+        return "speech_to_sound"
+    if left.kind == "sound" and right.kind == "speech":
+        return "sound_to_speech"
+    return "sound_to_sound"
+
+
+def _match_boundary_level(left: np.ndarray, right: np.ndarray, sample_rate: int, config: dict[str, Any]) -> np.ndarray:
+    window = max(1, int(sample_rate * float(config.get("level_window_ms", 20)) / 1000))
+    left_rms = float(np.sqrt(np.mean(np.square(left[-window:])))) if len(left) else 0.0
+    right_rms = float(np.sqrt(np.mean(np.square(right[:window])))) if len(right) else 0.0
+    floor = float(config.get("level_rms_floor", 0.003))
+    if left_rms < floor or right_rms < floor:
+        return right
+    requested_db = 20.0 * np.log10(left_rms / right_rms)
+    limit_db = max(0.0, float(config.get("max_gain_correction_db", 2.5)))
+    correction_db = float(np.clip(requested_db, -limit_db, limit_db))
+    return (right * (10.0 ** (correction_db / 20.0))).astype(np.float32)
+
+
+def stitch(
+    parts: list[tuple[np.ndarray, int] | AudioPart],
+    crossfade_ms: int = 8,
+    boundary_config: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, int]:
+    """Join generated pieces with deterministic conservative equal-power boundaries."""
 
     if not parts:
         raise ValueError("нет аудиосегментов для объединения")
-    target_rate = parts[0][1]
-    prepared = [resample(wav, rate, target_rate) for wav, rate in parts]
-    output = prepared[0]
-    fade_size = int(target_rate * crossfade_ms / 1000)
-    for part in prepared[1:]:
+    source_parts = [_coerce_part(part) for part in parts]
+    target_rate = source_parts[0].sample_rate
+    config = dict(boundary_config or {})
+    prepared = []
+    for part in source_parts:
+        waveform = resample(part.waveform, part.sample_rate, target_rate)
+        if boundary_config is not None:
+            waveform = _clean_internal_edges(waveform, target_rate, config)
+        prepared.append(AudioPart(waveform, target_rate, part.kind, part.profile_id))
+    output = prepared[0].waveform
+    previous = prepared[0]
+    transitions = dict(config.get("crossfade_ms", {}) or {})
+    for current in prepared[1:]:
+        part = current.waveform
+        if boundary_config is not None:
+            part = _match_boundary_level(output, part, target_rate, config)
+        transition_ms = float(transitions.get(_transition_key(previous, current), crossfade_ms))
+        fade_size = int(target_rate * transition_ms / 1000)
         overlap = min(fade_size, len(output), len(part))
         if overlap > 0:
-            fade_in = (
-                np.array([0.5], dtype=np.float32)
+            phase = (
+                np.array([np.pi / 4], dtype=np.float32)
                 if overlap == 1
-                else np.linspace(0.0, 1.0, overlap, dtype=np.float32)
+                else np.linspace(0.0, np.pi / 2, overlap, dtype=np.float32)
             )
-            mixed = output[-overlap:] * (1.0 - fade_in) + part[:overlap] * fade_in
+            mixed = output[-overlap:] * np.cos(phase) + part[:overlap] * np.sin(phase)
             output = np.concatenate((output[:-overlap], mixed, part[overlap:]))
         else:
             output = np.concatenate((output, part))
+        previous = current
     return output.clip(-1.0, 1.0), target_rate
 
 
