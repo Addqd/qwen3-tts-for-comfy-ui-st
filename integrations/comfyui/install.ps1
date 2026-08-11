@@ -129,7 +129,7 @@ $JunctionSource = if ($TargetItem) { Get-JunctionSource $Target } else { $null }
 $CurrentJunction = $JunctionSource -and (Test-SamePath $JunctionSource $Source)
 
 if ($Synchronize) {
-    if ($CurrentJunction) {
+    if ($CurrentJunction -and $Mode -eq "Junction") {
         if (-not $Managed -or [string]$MarkerInfo.mode -ne "Junction") {
             if ($ScriptCmdlet.ShouldProcess($Marker, "Record managed Qwen TTS Junction")) {
                 Write-InstallMarker -InstallMode "Junction"
@@ -143,16 +143,15 @@ if ($Synchronize) {
         throw "Unmanaged qwen_tts_api_nodes exists at $Target. It was not changed. Inspect or move it, then run scripts/install-comfyui-nodes.ps1 explicitly."
     }
 
-    if ($Managed -and $TargetItem -and [string]$MarkerInfo.mode -eq "Copy" -and -not $JunctionSource) {
+    if ($Mode -eq "Copy" -and $Managed -and $TargetItem -and [string]$MarkerInfo.mode -eq "Copy" -and -not $JunctionSource) {
         if (Test-ManagedCopyCurrent -SourcePath $Source -TargetPath $Target) {
             Write-Host "Qwen TTS ComfyUI nodes: current (Copy)"
             return
         }
     }
 
-    $InstallMode = if ($Managed) { [string]$MarkerInfo.mode } else { $Mode }
     $Status = if ($TargetItem) { "refreshed from repository source" } else { "installed from repository source" }
-    Install-ManagedNode -InstallMode $InstallMode -Status $Status
+    Install-ManagedNode -InstallMode $Mode -Status $Status
     return
 }
 

@@ -51,14 +51,24 @@ try {
     $Item = Get-Item -LiteralPath $JunctionTarget -Force
     Assert-True ([System.IO.Path]::GetFullPath([string]@($Item.Target)[0]) -eq $Source) "Stale managed Junction was not refreshed."
 
-    $CopyRoot = New-FakeComfyUI "copy"
+    $CopyMigrationRoot = New-FakeComfyUI "copy-to-junction"
+    & $InstallScript -ComfyUIPath $CopyMigrationRoot -Mode Copy -Synchronize -Confirm:$false
+    $CopyMigrationTarget = Get-NodeTarget $CopyMigrationRoot
+    & $InstallScript -ComfyUIPath $CopyMigrationRoot -Mode Junction -Synchronize -Confirm:$false
+    $MigratedItem = Get-Item -LiteralPath $CopyMigrationTarget -Force
+    Assert-True ([string]$MigratedItem.LinkType -eq "Junction") "Managed Copy did not migrate to Junction."
+    Assert-True ([System.IO.Path]::GetFullPath([string]@($MigratedItem.Target)[0]) -eq $Source) "Migrated Junction source is incorrect."
+    $MigrationMarker = Join-Path $CopyMigrationRoot "ComfyUI\custom_nodes\.qwen_tts_api_nodes-install.json"
+    $MigrationMarkerInfo = Get-Content -Raw -LiteralPath $MigrationMarker | ConvertFrom-Json
+    Assert-True ([string]$MigrationMarkerInfo.mode -eq "Junction") "Migrated install marker does not record Junction mode."
+
+    $CopyRoot = New-FakeComfyUI "copy-refresh"
     & $InstallScript -ComfyUIPath $CopyRoot -Mode Copy -Synchronize -Confirm:$false
     $CopyTarget = Get-NodeTarget $CopyRoot
-    & $InstallScript -ComfyUIPath $CopyRoot -Mode Junction -Synchronize -Confirm:$false
     Set-Content -LiteralPath (Join-Path $CopyTarget "nodes.py") -Value "stale managed copy" -Encoding UTF8
-    & $InstallScript -ComfyUIPath $CopyRoot -Mode Junction -Synchronize -Confirm:$false
+    & $InstallScript -ComfyUIPath $CopyRoot -Mode Copy -Synchronize -Confirm:$false
     $CopyItem = Get-Item -LiteralPath $CopyTarget -Force
-    Assert-True (-not $CopyItem.LinkType) "Managed Copy unexpectedly changed installation mode."
+    Assert-True (-not $CopyItem.LinkType) "Explicit Copy synchronization changed installation mode."
     $SourceHash = (Get-FileHash -LiteralPath (Join-Path $Source "nodes.py") -Algorithm SHA256).Hash
     $CopyHash = (Get-FileHash -LiteralPath (Join-Path $CopyTarget "nodes.py") -Algorithm SHA256).Hash
     Assert-True ($SourceHash -eq $CopyHash) "Stale managed Copy was not refreshed."
