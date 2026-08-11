@@ -191,7 +191,7 @@ def _append_segment(segments: list[EmotionSegment], style: str, text: str, kind:
     clean = _clean_spoken_text(text)
     if not clean:
         return
-    if kind == "narration" and segments and segments[-1].style == style and segments[-1].kind == kind:
+    if kind in {"narration", "dialogue"} and segments and segments[-1].style == style and segments[-1].kind == kind:
         segments[-1].text = f"{segments[-1].text} {clean}".strip()
         return
     segments.append(EmotionSegment(style=style, text=clean, kind=kind))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import shutil
 from dataclasses import asdict, dataclass
@@ -12,6 +13,9 @@ import numpy as np
 import soundfile as sf
 
 from .emotion import ALLOWED_SOUNDS, ALLOWED_STYLES, SOUND_TYPES
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -129,24 +133,33 @@ class VoiceLibrary:
             try:
                 data = json.loads(metadata_path.read_text(encoding="utf-8"))
                 display = str(data["display_name"])
-                emotion = str(data.get("emotion", data.get("style", "neutral"))).lower()
-                if emotion not in ALLOWED_STYLES:
-                    raise ValueError(f"unsupported emotion capability: {emotion}")
+                legacy_style = str(data.get("style", "neutral"))
+                emotion_value = str(data.get("emotion", legacy_style))
+                emotion = emotion_value.lower()
+                emotion_enabled = bool(data.get("emotion_enabled", True))
+                unsupported_emotion = emotion not in ALLOWED_STYLES
+                if unsupported_emotion:
+                    LOGGER.warning(
+                        "Loaded legacy voice profile %s with unsupported style %s; emotion routing disabled",
+                        data.get("profile_id", display),
+                        emotion_value,
+                    )
+                    emotion_enabled = False
                 sounds = _normalize_sounds(data.get("sounds", []))
                 profile = VoiceProfile(
                     voice_id=f"clone:{display}",
                     character=str(data["character"]),
                     profile_id=str(data["profile_id"]),
                     display_name=display,
-                    style=emotion,
+                    style=legacy_style if unsupported_emotion else emotion,
                     reference_audio=str(data.get("reference_audio", "reference.wav")),
                     ref_text=str(data.get("ref_text", "")),
                     language=str(data.get("language", "Russian")),
                     clone_mode=str(data.get("clone_mode", "icl")),
                     notes=str(data.get("notes", "")),
                     directory=metadata_path.parent,
-                    emotion_enabled=bool(data.get("emotion_enabled", True)),
-                    emotion=emotion,
+                    emotion_enabled=emotion_enabled,
+                    emotion=emotion_value if unsupported_emotion else emotion,
                     sound_enabled=bool(data.get("sound_enabled", bool(sounds))),
                     sounds=sounds,
                 )
@@ -215,14 +228,22 @@ class VoiceLibrary:
     def resolve_family_neutral(self, selected: VoiceProfile, configured_fallback: str | None = None) -> VoiceProfile:
         """Return the deterministic neutral base for a selected voice family."""
 
+        def is_neutral_speech(profile: VoiceProfile) -> bool:
+            return (
+                profile.emotion_enabled
+                and profile.emotion.lower() == "neutral"
+                and profile.style.lower() == "neutral"
+                and profile.reference_path.exists()
+            )
+
         neutral = self.find_style(selected.character, "neutral", selected)
-        if neutral.style.lower() == "neutral" and neutral.reference_path.exists():
+        if is_neutral_speech(neutral):
             return neutral
 
         if configured_fallback:
             safe = self.resolve(configured_fallback)
             safe_neutral = self.find_style(safe.character, "neutral", safe)
-            if safe_neutral.style.lower() == "neutral" and safe_neutral.reference_path.exists():
+            if is_neutral_speech(safe_neutral):
                 return safe_neutral
 
         raise KeyError(
@@ -256,7 +277,8 @@ class VoiceLibrary:
             backup_parent = self.backups_root / character_dir
             backup_parent.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            backup = backup_parent / f"{style_dir}-{timestamp}"
+            backup_base = style_dir if emotion_enabled else target_dir
+            backup = backup_parent / f"{backup_base}-{timestamp}"
             shutil.copytree(target, backup)
         target.mkdir(parents=True, exist_ok=True)
         reference = target / "reference.wav"
@@ -264,7 +286,9 @@ class VoiceLibrary:
         payload = {
             "character": metadata["character"],
             "profile_id": profile_id,
-            "display_name": metadata.get("display_name") or f"{metadata['character']}{style_dir.title()}",
+            "display_name": metadata.get("display_name") or (
+                f"{metadata['character']}{style_dir.title()}" if emotion_enabled else profile_id
+            ),
             "style": emotion,
             "emotion_enabled": emotion_enabled,
             "emotion": emotion,

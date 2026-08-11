@@ -10,7 +10,7 @@ import soundfile as sf
 from scipy.signal import resample_poly
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class AudioPart:
     waveform: np.ndarray
     sample_rate: int
@@ -53,14 +53,21 @@ def _clean_internal_edges(waveform: np.ndarray, sample_rate: int, config: dict[s
     safety = max(0, int(sample_rate * float(config.get("edge_safety_ms", 4)) / 1000))
     start = 0
     leading_activity = np.flatnonzero(np.abs(value[:window]) > threshold)
-    if leading_activity.size and int(leading_activity[0]) >= minimum:
-        start = max(0, int(leading_activity[0]) - safety)
+    if leading_activity.size:
+        if int(leading_activity[0]) >= minimum:
+            start = max(0, int(leading_activity[0]) - safety)
+    else:
+        start = min(len(value), max(0, window - safety))
     end = len(value)
     trailing_activity = np.flatnonzero(np.abs(value[-window:]) > threshold)
     if trailing_activity.size:
         trailing = window - 1 - int(trailing_activity[-1])
         if trailing >= minimum:
             end = min(len(value), len(value) - trailing + safety)
+    else:
+        end = max(0, len(value) - window + safety)
+    if start >= end:
+        return np.zeros(0, dtype=np.float32)
     return normalize_waveform(value[start:end])
 
 

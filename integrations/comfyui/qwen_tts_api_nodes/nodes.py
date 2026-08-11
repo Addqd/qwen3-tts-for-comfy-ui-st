@@ -154,7 +154,11 @@ def _quote_aware_segments(text: str):
         clean = _strip_service_tags(value).replace('\\"', '"').strip()
         if kind == "dialogue":
             if clean:
-                segments.append({"kind": "dialogue", "style": pending_style or "neutral", "text": clean})
+                style = pending_style or "neutral"
+                if segments and segments[-1]["kind"] == "dialogue" and segments[-1]["style"] == style:
+                    segments[-1]["text"] = f'{segments[-1]["text"]} {clean}'.strip()
+                else:
+                    segments.append({"kind": "dialogue", "style": style, "text": clean})
             else:
                 warnings.append("empty_dialogue_ignored")
             pending_style = None
@@ -509,8 +513,12 @@ class QwenTTSCloneVoiceNode:
             "ref_text": ("STRING", {"multiline": True}),
             "profile_name": ("STRING", {"default": "CharacterNeutral"}),
             "character_name": ("STRING", {"default": "Character"}),
-            "emotion_enabled": ("BOOLEAN", {"default": True}),
             "style": (list(ALLOWED_STYLES), {"default": "neutral"}),
+            "language": (["Russian"], {"default": "Russian"}),
+            "clone_mode": (["icl", "x_vector"], {"default": "icl"}),
+            "consent_confirmed": ("BOOLEAN", {"default": False}),
+            "overwrite": ("BOOLEAN", {"default": False}),
+            "emotion_enabled": ("BOOLEAN", {"default": True}),
             "sound_enabled": ("BOOLEAN", {"default": False}),
             "sound_laugh": ("BOOLEAN", {"default": False}),
             "sound_giggle": ("BOOLEAN", {"default": False}),
@@ -518,10 +526,6 @@ class QwenTTSCloneVoiceNode:
             "sound_sigh": ("BOOLEAN", {"default": False}),
             "sound_pant": ("BOOLEAN", {"default": False}),
             "sound_moan": ("BOOLEAN", {"default": False}),
-            "language": (["Russian"], {"default": "Russian"}),
-            "clone_mode": (["icl", "x_vector"], {"default": "icl"}),
-            "consent_confirmed": ("BOOLEAN", {"default": False}),
-            "overwrite": ("BOOLEAN", {"default": False}),
         }}
 
     RETURN_TYPES = ("STRING", "STRING", "STRING")
@@ -536,19 +540,19 @@ class QwenTTSCloneVoiceNode:
         ref_text,
         profile_name,
         character_name,
-        emotion_enabled,
         style,
-        sound_enabled,
-        sound_laugh,
-        sound_giggle,
-        sound_gasp,
-        sound_sigh,
-        sound_pant,
-        sound_moan,
         language,
         clone_mode,
         consent_confirmed,
         overwrite,
+        emotion_enabled=True,
+        sound_enabled=False,
+        sound_laugh=False,
+        sound_giggle=False,
+        sound_gasp=False,
+        sound_sigh=False,
+        sound_pant=False,
+        sound_moan=False,
     ):
         if not consent_confirmed:
             raise ValueError("Confirm permission to use this voice before cloning")
@@ -557,6 +561,7 @@ class QwenTTSCloneVoiceNode:
             for sound, enabled in zip(
                 SOUND_TYPES,
                 (sound_laugh, sound_giggle, sound_gasp, sound_sigh, sound_pant, sound_moan),
+                strict=True,
             )
             if enabled
         ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import ast
+import inspect
 import io
 import json
 from pathlib import Path
@@ -102,26 +103,33 @@ def test_canonical_voice_lab_has_safe_quality_runtime_flow():
         "Введите точную дословную транскрипцию загруженного WAV.",
         "my_character_neutral",
         "MyCharacter",
-        True,
         "neutral",
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
-        False,
         "Russian",
         "icl",
+        False,
+        False,
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
         False,
         False,
     ]
     clone_inputs = nodes.QwenTTSCloneVoiceNode.INPUT_TYPES()["required"]
     assert list(clone_inputs)[2:] == [
-        "ref_text", "profile_name", "character_name", "emotion_enabled", "style",
+        "ref_text", "profile_name", "character_name", "style", "language", "clone_mode",
+        "consent_confirmed", "overwrite", "emotion_enabled",
         "sound_enabled", "sound_laugh", "sound_giggle", "sound_gasp", "sound_sigh",
-        "sound_pant", "sound_moan", "language", "clone_mode", "consent_confirmed", "overwrite",
+        "sound_pant", "sound_moan",
     ]
+    clone_parameters = list(inspect.signature(nodes.QwenTTSCloneVoiceNode.clone).parameters.values())[1:]
+    assert [parameter.name for parameter in clone_parameters[:10]] == [
+        "server", "reference_audio", "ref_text", "profile_name", "character_name",
+        "style", "language", "clone_mode", "consent_confirmed", "overwrite",
+    ]
+    assert all(parameter.default is not inspect.Parameter.empty for parameter in clone_parameters[10:])
     synth = by_type["QwenTTSSynthesize"]["widgets_values"]
     assert synth[:6] == [
         "Она открыла Visual Studio Code и сказала hello.",
@@ -140,9 +148,15 @@ def test_canonical_voice_lab_has_safe_quality_runtime_flow():
         -1,
         -1,
     ]
-    assert workflow["version"] == 0.5
+    assert workflow["version"] == 0.4
+    assert clone["widgets_values"][6] is False
+    assert "consent_confirmed" in workflow["extra"]["info"]
+    assert "вручную" in workflow["extra"]["info"]
     voice_link = next(link for link in workflow["links"] if link[0] == 5)
-    assert voice_link[3:5] == [by_type["QwenTTSSynthesize"]["id"], 2]
+    voice_input_index = next(
+        index for index, item in enumerate(by_type["QwenTTSSynthesize"]["inputs"]) if item["name"] == "voice"
+    )
+    assert voice_link[3:5] == [by_type["QwenTTSSynthesize"]["id"], voice_input_index]
 
 
 def test_endpoint_rejects_non_local_address():
@@ -192,6 +206,7 @@ def test_comfy_parser_matches_backend_contract_and_styles():
         '[voice: happy] "Malformed."',
         '[voice:angry] Она отвернулась. "Обычная реплика."',
         '[voice:tense] "Незакрытая реплика',
+        '[voice:happy] "Да." [voice:happy] "Конечно!" [sound:giggle] [voice:happy] "Ещё."',
     ]
     for text in corpus:
         backend_segments, backend_warnings = parse_emotion_script_detailed(text)
@@ -231,19 +246,19 @@ def test_clone_voice_controls_register_multiple_sound_capabilities(monkeypatch):
         "Точная транскрипция.",
         "test_profile",
         "TestCharacter",
-        True,
         "pleasure",
-        True,
-        False,
-        False,
-        False,
-        True,
-        True,
-        True,
         "Russian",
         "icl",
         True,
         False,
+        True,
+        True,
+        False,
+        False,
+        False,
+        True,
+        True,
+        True,
     )
     assert captured["emotion_enabled"] is True
     assert captured["style"] == "pleasure"

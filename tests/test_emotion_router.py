@@ -108,6 +108,23 @@ def test_performance_router_orders_speech_and_sounds_without_leaking_service_tag
     assert all("[sound:" not in item.text.lower() for item in segments)
 
 
+def test_adjacent_same_style_dialogue_merges_but_performance_boundaries_remain():
+    merged = parse_emotion_script('[voice:happy] "Да." [voice:happy] "Конечно!"')
+    assert [(item.kind, item.style, item.text) for item in merged] == [
+        ("dialogue", "happy", "Да. Конечно!"),
+    ]
+
+    separated = parse_emotion_script(
+        '[voice:happy] "Да." [sound:giggle] [voice:happy] "Конечно!" [voice:sad] "Но потом."'
+    )
+    assert [(item.kind, item.style, item.text, item.sound_type) for item in separated] == [
+        ("dialogue", "happy", "Да.", None),
+        ("sound", "happy", "", "giggle"),
+        ("dialogue", "happy", "Конечно!", None),
+        ("dialogue", "sad", "Но потом.", None),
+    ]
+
+
 @pytest.mark.parametrize(
     "text,style",
     [
@@ -147,8 +164,7 @@ def test_unknown_and_malformed_tags_are_neutral_and_never_spoken():
     text = '[voice:confused] "Что?" [voice: happy] "Правда?" [voice:] narration'
     segments, warnings = parse_emotion_script_detailed(text)
     assert [(item.kind, item.style, item.text) for item in segments] == [
-        ("dialogue", "neutral", "Что?"),
-        ("dialogue", "neutral", "Правда?"),
+        ("dialogue", "neutral", "Что? Правда?"),
         ("narration", "neutral", "narration"),
     ]
     assert "unknown_voice_tag_neutral_fallback" in warnings
@@ -215,6 +231,32 @@ def _add_profile(
             "display_name": display,
             "style": style,
             "ref_text": "Точный тестовый текст.",
+        },
+    )
+    return profile.voice_id
+
+
+def _add_sound_profile(
+    service: TTSService,
+    tmp_path: Path,
+    sound_type: str,
+    character: str,
+    prefix: str,
+) -> str:
+    source = tmp_path / f"{prefix}-{sound_type}.wav"
+    rate = 24000
+    sf.write(source, 0.1 * np.sin(2 * np.pi * 330 * np.arange(rate * 2) / rate), rate)
+    profile, _ = service.library.create(
+        source,
+        {
+            "character": character,
+            "profile_id": f"{prefix}_{sound_type}",
+            "display_name": f"{prefix}_{sound_type}",
+            "style": "neutral",
+            "emotion_enabled": False,
+            "sound_enabled": True,
+            "sounds": [sound_type],
+            "ref_text": "Точный тестовый звук.",
         },
     )
     return profile.voice_id
@@ -317,6 +359,18 @@ def test_missing_sound_is_skipped_while_surrounding_speech_is_returned(tmp_path,
     assert all("sound:" not in text.lower() for text, _ in captured)
 
 
+def test_only_unavailable_sound_returns_clear_api_error(tmp_path):
+    service = TTSService(_make_config(tmp_path))
+    neutral = _add_profile(service, tmp_path, "neutral")
+    with TestClient(create_app(config=service.config)) as client:
+        response = client.post(
+            "/v1/audio/speech",
+            json={"voice": neutral, "input": "[sound:moan]", "response_format": "wav"},
+        )
+    assert response.status_code == 422
+    assert "ни одного аудиосегмента" in response.text
+
+
 def test_new_styles_fall_back_then_are_selected_after_reload(tmp_path, monkeypatch):
     service = TTSService(_make_config(tmp_path))
     neutral = _add_profile(service, tmp_path, "neutral")
@@ -380,6 +434,31 @@ def test_missing_family_neutral_uses_configured_safe_neutral(tmp_path, monkeypat
     monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
     asyncio.run(service.synthesize(_request('Нейтральное описание.', orphan_happy)))
     assert selected == [safe]
+
+
+def test_fallback_family_uses_the_same_character_for_speech_and_sound(tmp_path, monkeypatch):
+    service = TTSService(_make_config(tmp_path))
+    safe = _add_profile(service, tmp_path, "neutral")
+    safe_sound = _add_sound_profile(service, tmp_path, "laugh", "TestRuRouter", "safe")
+    orphan_happy = _add_profile(
+        service,
+        tmp_path,
+        "happy",
+        character="OrphanFamily",
+        prefix="orphan",
+    )
+    orphan_sound = _add_sound_profile(service, tmp_path, "laugh", "OrphanFamily", "orphan")
+    selected: list[str] = []
+    original = service.worker.synthesize
+
+    def recording_synthesize(text, profile, language):
+        selected.append(profile.voice_id)
+        return original(text, profile, language)
+
+    monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
+    asyncio.run(service.synthesize(_request("Описание. [sound:laugh]", orphan_happy)))
+    assert selected == [safe, safe_sound]
+    assert orphan_sound not in selected
 
 
 def test_only_service_tags_produce_clear_api_error(tmp_path):

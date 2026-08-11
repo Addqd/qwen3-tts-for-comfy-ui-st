@@ -89,6 +89,25 @@ def test_performance_boundaries_trim_only_edges_and_bound_gain_correction():
     assert np.max(np.abs(output[-80:])) <= 0.01 * 10 ** (2.0 / 20.0) * 1.001
 
 
+def test_fully_silent_edge_windows_are_trimmed_without_touching_internal_pause():
+    rate = 1000
+    pulse = np.tile(np.array([0.2, -0.2], dtype=np.float32), 10)
+    waveform = np.concatenate((np.zeros(40), pulse, np.zeros(30), pulse, np.zeros(40))).astype(np.float32)
+    output, _ = stitch(
+        [AudioPart(waveform, rate)],
+        boundary_config={
+            "edge_window_ms": 40,
+            "edge_silence_threshold": 0.0025,
+            "edge_min_silence_ms": 12,
+            "edge_safety_ms": 4,
+        },
+    )
+    assert len(output) == 78
+    assert np.all(output[:4] == 0)
+    assert np.all(output[24:54] == 0)
+    assert np.all(output[-4:] == 0)
+
+
 @pytest.mark.asyncio
 async def test_queue_full_and_wait_timeout(tmp_path):
     service = TTSService(config_with(tmp_path))

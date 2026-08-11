@@ -8,7 +8,6 @@ import tempfile
 import time
 from typing import Any
 
-import numpy as np
 import soundfile as sf
 
 from .audio import AudioPart, change_speed, encode, fade_edges, pad_edges, stitch
@@ -227,7 +226,7 @@ class TTSService:
             for segment in segments:
                 if segment.kind == "sound":
                     profile = self.library.find_sound(
-                        selected.character,
+                        base.character,
                         str(segment.sound_type),
                         segment.preferred_style,
                     )
@@ -258,15 +257,15 @@ class TTSService:
                             span_text = normalize_russian_text(span_text, normalize_mode, yo_dictionary)
                         await generate_piece(span_text, profile, language_span.language, "speech")
             router_warnings = list(dict.fromkeys(router_warnings))
-            if parts:
-                waveform, sample_rate = stitch(
-                    parts,
-                    crossfade_ms=int(self.config.get("pauses.crossfade_ms", 8)),
-                    boundary_config=dict(self.config.get("performance.boundaries", {}) or {}),
-                )
-            else:
-                sample_rate = 24000
-                waveform = np.zeros(0, dtype=np.float32)
+            if not parts:
+                raise ValueError("performance не создал ни одного аудиосегмента")
+            waveform, sample_rate = stitch(
+                parts,
+                crossfade_ms=int(self.config.get("pauses.crossfade_ms", 8)),
+                boundary_config=dict(self.config.get("performance.boundaries", {}) or {}),
+            )
+            if not waveform.size:
+                raise ValueError("boundary pipeline вернул пустое итоговое аудио")
             waveform = change_speed(waveform, request.speed)
             waveform = fade_edges(waveform, sample_rate, int(self.config.get("pauses.edge_fade_ms", 5)))
             waveform = pad_edges(waveform, sample_rate, leading_silence_ms, trailing_silence_ms)

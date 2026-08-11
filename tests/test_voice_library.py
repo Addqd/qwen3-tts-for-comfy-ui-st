@@ -1,8 +1,10 @@
 import json
+import logging
 from pathlib import Path
 import shutil
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from qwen3_tts_st.voices import VoiceLibrary, validate_audio
@@ -114,6 +116,84 @@ def test_performance_capabilities_persist_and_resolve_deterministically(tmp_path
     assert reloaded.find_sound("Performer", "moan", "happy").profile_id == pleasure.profile_id
     assert reloaded.find_sound("Performer", "laugh").profile_id == alpha_laugh.profile_id
     assert reloaded.find_sound("Performer", "giggle") is None
+    with pytest.raises(ValueError, match="unsupported sound capability"):
+        reloaded.find_sound("Performer", "whistle")
+
+
+def test_legacy_unsupported_style_remains_loadable_but_not_routable(tmp_path, caplog):
+    source = tmp_path / "source.wav"
+    make_wav(source)
+    root = tmp_path / "library"
+    library = VoiceLibrary(root)
+    fallback, _ = library.create(
+        source,
+        {
+            "character": "Fallback",
+            "profile_id": "fallback_neutral",
+            "display_name": "FallbackNeutral",
+            "style": "neutral",
+            "ref_text": "Точный текст.",
+        },
+    )
+    legacy_dir = root / "profiles" / "legacy" / "mysterious"
+    legacy_dir.mkdir(parents=True)
+    shutil.copy2(source, legacy_dir / "reference.wav")
+    (legacy_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "character": "Legacy",
+                "profile_id": "legacy_mysterious",
+                "display_name": "LegacyMysterious",
+                "style": "Mysterious Legacy",
+                "reference_audio": "reference.wav",
+                "ref_text": "Старый текст.",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="qwen3_tts_st.voices"):
+        library.reload()
+    legacy = library.resolve("legacy_mysterious")
+    assert legacy.style == "Mysterious Legacy"
+    assert legacy.emotion == "Mysterious Legacy"
+    assert legacy.emotion_enabled is False
+    assert library.find_style("Legacy", "mysterious", fallback) is fallback
+    assert "emotion routing disabled" in caplog.text
+
+
+def test_sound_only_profiles_use_profile_names_and_cannot_be_neutral_speech(tmp_path):
+    source = tmp_path / "source.wav"
+    make_wav(source)
+    library = VoiceLibrary(tmp_path / "library")
+
+    def create(profile_id: str, *, overwrite: bool = False):
+        return library.create(
+            source,
+            {
+                "character": "SoundOnly",
+                "profile_id": profile_id,
+                "style": "neutral",
+                "emotion_enabled": False,
+                "sound_enabled": True,
+                "sounds": ["laugh"],
+                "ref_text": "Ха-ха-ха.",
+            },
+            overwrite=overwrite,
+        )[0]
+
+    first = create("sound_laugh_a")
+    second = create("sound_laugh_b")
+    assert first.display_name == "sound_laugh_a"
+    assert second.display_name == "sound_laugh_b"
+    with pytest.raises(KeyError, match="neutral-профиль"):
+        library.resolve_family_neutral(first, first.voice_id)
+
+    create("sound_laugh_a", overwrite=True)
+    backup_names = [path.name for path in (library.backups_root / "soundonly").iterdir()]
+    assert any(name.startswith("sound_laugh_a-") for name in backup_names)
+    assert not any(name.startswith("neutral-") for name in backup_names)
 
 
 def test_overwrite_backups_are_preserved_but_never_indexed(tmp_path):
