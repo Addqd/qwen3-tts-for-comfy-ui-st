@@ -13,6 +13,7 @@ pytest.importorskip("peft")
 from training.russian_adaptation.train_lora import (
     TRAINING_SEMANTICS_VERSION,
     SelectiveTrainingModel,
+    advance_optimizer_step_if_applied,
     aligned_subtalker_cross_entropy,
     configure_subtalker_precision,
     copy_non_weight_assets,
@@ -207,3 +208,22 @@ def test_empty_eval_overlap_and_cpu_training_guards_fail_clearly() -> None:
         )
     with pytest.raises(RuntimeError, match="CUDA training is required"):
         validate_cuda_training_state(SimpleNamespace(device=torch.device("cpu")), nn.Linear(1, 1), {})
+
+
+def test_optimizer_bookkeeping_advances_only_when_fp16_update_is_applied() -> None:
+    class Scheduler:
+        steps = 0
+
+        def step(self) -> None:
+            self.steps += 1
+
+    scheduler = Scheduler()
+    optimizer_step, applied = advance_optimizer_step_if_applied(
+        SimpleNamespace(optimizer_step_was_skipped=False), scheduler, 7
+    )
+    assert (optimizer_step, applied, scheduler.steps) == (8, True, 1)
+
+    optimizer_step, applied = advance_optimizer_step_if_applied(
+        SimpleNamespace(optimizer_step_was_skipped=True), scheduler, optimizer_step
+    )
+    assert (optimizer_step, applied, scheduler.steps) == (8, False, 1)

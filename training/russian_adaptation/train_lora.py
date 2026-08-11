@@ -413,6 +413,15 @@ def validate_cuda_training_state(accelerator: Accelerator, model: nn.Module, bat
     )
 
 
+def advance_optimizer_step_if_applied(
+    accelerator: Accelerator, scheduler: Any, optimizer_step: int
+) -> tuple[int, bool]:
+    if accelerator.optimizer_step_was_skipped:
+        return optimizer_step, False
+    scheduler.step()
+    return optimizer_step + 1, True
+
+
 def train(model_key: str) -> dict[str, Any]:
     plan = load_plan()
     training = plan["training"]
@@ -554,31 +563,35 @@ def train(model_key: str) -> dict[str, Any]:
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             if accelerator.sync_gradients:
-                scheduler.step()
-                optimizer_step += 1
-                metric = {
-                    "at": utc_now(),
-                    "epoch": 0,
-                    "micro_step": micro_step,
-                    "optimizer_step": optimizer_step,
-                    "loss": float(loss.detach().cpu()),
-                    "first_code_loss": float(first_loss.cpu()),
-                    "subtalker_loss": float(subtalker_loss.cpu()),
-                    "learning_rate": scheduler.get_last_lr()[0],
-                }
-                if accelerator.is_main_process:
-                    append_metric(metrics_path, metric)
-                accelerator.print(json.dumps(metric, ensure_ascii=False))
-                if optimizer_step % int(training["checkpoint_optimizer_steps"]) == 0:
-                    save_resume_checkpoint(
-                        accelerator,
-                        model,
-                        optimizer,
-                        resume_root,
-                        micro_step,
-                        optimizer_step,
-                        metric,
-                    )
+                optimizer_step, update_applied = advance_optimizer_step_if_applied(
+                    accelerator, scheduler, optimizer_step
+                )
+                if not update_applied:
+                    accelerator.print(f"Skipped optimizer update at micro_step={micro_step} after FP16 overflow")
+                else:
+                    metric = {
+                        "at": utc_now(),
+                        "epoch": 0,
+                        "micro_step": micro_step,
+                        "optimizer_step": optimizer_step,
+                        "loss": float(loss.detach().cpu()),
+                        "first_code_loss": float(first_loss.cpu()),
+                        "subtalker_loss": float(subtalker_loss.cpu()),
+                        "learning_rate": scheduler.get_last_lr()[0],
+                    }
+                    if accelerator.is_main_process:
+                        append_metric(metrics_path, metric)
+                    accelerator.print(json.dumps(metric, ensure_ascii=False))
+                    if optimizer_step % int(training["checkpoint_optimizer_steps"]) == 0:
+                        save_resume_checkpoint(
+                            accelerator,
+                            model,
+                            optimizer,
+                            resume_root,
+                            micro_step,
+                            optimizer_step,
+                            metric,
+                        )
 
     evaluation = evaluate(model, eval_loader, accelerator)
     if accelerator.is_main_process:
