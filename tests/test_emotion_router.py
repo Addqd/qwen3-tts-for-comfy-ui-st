@@ -257,6 +257,7 @@ def _add_sound_profile(
             "sound_enabled": True,
             "sounds": [sound_type],
             "ref_text": "Точный тестовый звук.",
+            "language": "English",
         },
     )
     return profile.voice_id
@@ -368,7 +369,9 @@ def test_only_unavailable_sound_returns_clear_api_error(tmp_path):
             json={"voice": neutral, "input": "[sound:moan]", "response_format": "wav"},
         )
     assert response.status_code == 422
-    assert "ни одного аудиосегмента" in response.text
+    assert response.headers["content-type"].startswith("application/json")
+    body = response.json()
+    assert "ни одного аудиосегмента" in body["detail"]
 
 
 def test_new_styles_fall_back_then_are_selected_after_reload(tmp_path, monkeypatch):
@@ -448,17 +451,17 @@ def test_fallback_family_uses_the_same_character_for_speech_and_sound(tmp_path, 
         prefix="orphan",
     )
     orphan_sound = _add_sound_profile(service, tmp_path, "laugh", "OrphanFamily", "orphan")
-    selected: list[str] = []
+    selected: list[tuple[str, str]] = []
     original = service.worker.synthesize
 
     def recording_synthesize(text, profile, language):
-        selected.append(profile.voice_id)
+        selected.append((profile.voice_id, language))
         return original(text, profile, language)
 
     monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
     asyncio.run(service.synthesize(_request("Описание. [sound:laugh]", orphan_happy)))
-    assert selected == [safe, safe_sound]
-    assert orphan_sound not in selected
+    assert selected == [(safe, "Russian"), (safe_sound, "Russian")]
+    assert all(voice != orphan_sound for voice, _ in selected)
 
 
 def test_only_service_tags_produce_clear_api_error(tmp_path):

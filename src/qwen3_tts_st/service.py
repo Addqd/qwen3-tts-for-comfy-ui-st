@@ -243,7 +243,7 @@ class TTSService:
                         router_warnings.append(f"missing_sound_carrier:{segment.sound_type}")
                         continue
                     selected_voices.append(profile.voice_id)
-                    await generate_piece(carrier, profile, profile.language or "Russian", "sound")
+                    await generate_piece(carrier, profile, "Russian", "sound")
                     continue
 
                 profile = self.library.find_style(base.character, segment.style, base)
