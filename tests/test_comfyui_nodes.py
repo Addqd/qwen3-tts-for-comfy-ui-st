@@ -176,12 +176,16 @@ def test_clone_voice_dropdown_contains_all_delivery_styles():
 def test_synthesize_exposes_model_quality_and_russian_controls(monkeypatch):
     nodes = load_nodes()
     inputs = nodes.QwenTTSSynthesizeNode.INPUT_TYPES()
-    assert inputs["required"]["model"][0] == [
-        "Inherit Server model",
+    server_models = [
         "Backend Default (tts-1-ru)",
         "0.6B Fast (tts-1-ru-fast)",
         "1.7B Quality (tts-1-ru-quality)",
+        "0.6B Russian Tuned (tts-1-ru-fast-tuned)",
+        "1.7B Russian Tuned (tts-1-ru-quality-tuned)",
     ]
+    assert inputs["required"]["model"][0] == ["Inherit Server model", *server_models]
+    assert nodes.QwenTTSServerNode.INPUT_TYPES()["required"]["model"][0] == server_models
+    assert nodes.QwenTTSRuntimeSettingsNode.INPUT_TYPES()["required"]["active_model"][0] == server_models
     assert inputs["optional"]["generation_preset"][0] == [
         "Use Backend Default",
         "Default",
@@ -308,6 +312,8 @@ def test_synthesize_inherits_quality_server_model_and_keeps_legacy_values(monkey
         "Backend Default (tts-1-ru)": "tts-1-ru",
         "0.6B Fast (tts-1-ru-fast)": "tts-1-ru-fast",
         "1.7B Quality (tts-1-ru-quality)": "tts-1-ru-quality",
+        "0.6B Russian Tuned (tts-1-ru-fast-tuned)": "tts-1-ru-fast-tuned",
+        "1.7B Russian Tuned (tts-1-ru-quality-tuned)": "tts-1-ru-quality-tuned",
     }
     assert {value: nodes._model_alias(value, {}) for value in legacy_values} == legacy_values
 

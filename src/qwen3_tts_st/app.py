@@ -43,7 +43,13 @@ class SpeechRequest(BaseModel):
 
 
 class RuntimeSettingsRequest(BaseModel):
-    active_model: Literal["tts-1-ru", "tts-1-ru-fast", "tts-1-ru-quality"]
+    active_model: Literal[
+        "tts-1-ru",
+        "tts-1-ru-fast",
+        "tts-1-ru-quality",
+        "tts-1-ru-fast-tuned",
+        "tts-1-ru-quality-tuned",
+    ]
     generation_preset: Literal["default", "stable_russian"]
     russian_normalization: Literal["off", "basic", "full"]
     multilingual_mode: Literal["off", "auto"]
