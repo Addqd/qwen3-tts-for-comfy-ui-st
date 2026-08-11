@@ -92,7 +92,7 @@ def test_canonical_voice_lab_has_safe_quality_runtime_flow():
     assert by_type["QwenTTSServer"]["widgets_values"][2] == "Backend Default (tts-1-ru)"
     assert by_type["QwenTTSRuntimeSettings"]["widgets_values"][:3] == [
         True,
-        "1.7B Quality (tts-1-ru-quality)",
+        "1.7B Russian Tuned (tts-1-ru-quality-tuned)",
         "Stable Russian",
     ]
     assert by_type["QwenTTSCloneVoice"]["widgets_values"][-2:] == [False, False]
