@@ -71,6 +71,20 @@ def validate_trainable_parameters(model: nn.Module) -> dict[str, Any]:
     }
 
 
+def build_initial_talker_embeddings(
+    talker: nn.Module,
+    input_text_ids: torch.Tensor,
+    input_codec_ids: torch.Tensor,
+    text_embedding_mask: torch.Tensor,
+    codec_embedding_mask: torch.Tensor,
+    speaker_embedding: torch.Tensor,
+) -> torch.Tensor:
+    input_text_embedding = talker.text_projection(talker.model.text_embedding(input_text_ids)) * text_embedding_mask
+    input_codec_embedding = talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
+    input_codec_embedding[:, 7, :] = speaker_embedding
+    return input_text_embedding + input_codec_embedding
+
+
 class SelectiveTrainingModel(nn.Module):
     def __init__(self, adapter_model: PeftModel, subtalker_weight: float):
         super().__init__()
@@ -92,10 +106,14 @@ class SelectiveTrainingModel(nn.Module):
             speaker_embedding = core.speaker_encoder(ref_mels.to(dtype=core.dtype)).detach()
         input_text_ids = input_ids[:, :, 0]
         input_codec_ids = input_ids[:, :, 1]
-        input_text_embedding = core.talker.model.text_embedding(input_text_ids) * text_embedding_mask
-        input_codec_embedding = core.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
-        input_codec_embedding[:, 7, :] = speaker_embedding
-        input_embeddings = input_text_embedding + input_codec_embedding
+        input_embeddings = build_initial_talker_embeddings(
+            core.talker,
+            input_text_ids,
+            input_codec_ids,
+            text_embedding_mask,
+            codec_embedding_mask,
+            speaker_embedding,
+        )
         for index in range(1, 16):
             codec_embedding = core.talker.code_predictor.get_input_embeddings()[index - 1](codec_ids[:, :, index])
             input_embeddings = input_embeddings + codec_embedding * codec_mask.unsqueeze(-1)

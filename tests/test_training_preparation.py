@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from torch import nn
 
 import training.russian_adaptation.prepare_dataset as prepare_dataset_module
 from training.russian_adaptation.common import PACKAGE_DIR, load_plan, ordinary_text, project_path
@@ -255,3 +256,44 @@ def test_talker_input_grads_work_with_selective_lora() -> None:
     summary = validate_trainable_parameters(adapter)
     assert hasattr(core.talker, "_require_grads_hook")
     assert summary["trainable_tensor_count"] == 392
+
+
+@pytest.mark.parametrize(
+    ("model_key", "expected_text_size", "expected_hidden_size"),
+    (("0.6b", 2048, 1024), ("1.7b", 2048, 2048)),
+)
+def test_talker_text_projection_matches_codec_embeddings(
+    model_key: str, expected_text_size: int, expected_hidden_size: int
+) -> None:
+    pytest.importorskip("peft")
+    from transformers import AutoConfig
+
+    from qwen_tts.core.models.configuration_qwen3_tts import Qwen3TTSConfig
+    from training.russian_adaptation.train_lora import build_initial_talker_embeddings, freeze_base
+
+    plan = load_plan()
+    spec = plan["models"][model_key]
+    cache_name = f"models--Qwen--Qwen3-TTS-12Hz-{model_key.upper()}-Base"
+    source = project_path("model_cache") / cache_name / "snapshots" / spec["revision"]
+    AutoConfig.register("qwen3_tts", Qwen3TTSConfig, exist_ok=True)
+    config = AutoConfig.from_pretrained(source, local_files_only=True).talker_config
+    assert (config.text_hidden_size, config.hidden_size) == (expected_text_size, expected_hidden_size)
+
+    talker = nn.Module()
+    talker.model = nn.Module()
+    talker.model.text_embedding = nn.Embedding(8, config.text_hidden_size)
+    talker.model.codec_embedding = nn.Embedding(8, config.hidden_size)
+    talker.text_projection = nn.Linear(config.text_hidden_size, config.hidden_size)
+    freeze_base(talker)
+
+    embeddings = build_initial_talker_embeddings(
+        talker,
+        torch.zeros((1, 8), dtype=torch.long),
+        torch.ones((1, 8), dtype=torch.long),
+        torch.ones((1, 8, 1)),
+        torch.ones((1, 8, 1)),
+        torch.zeros((1, config.hidden_size)),
+    )
+
+    assert embeddings.shape == (1, 8, config.hidden_size)
+    assert not any(parameter.requires_grad for parameter in talker.text_projection.parameters())
