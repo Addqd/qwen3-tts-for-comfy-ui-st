@@ -11,6 +11,8 @@ import re
 import numpy as np
 import soundfile as sf
 
+from .emotion import ALLOWED_SOUNDS, ALLOWED_STYLES, SOUND_TYPES
+
 
 @dataclass
 class VoiceProfile:
@@ -25,6 +27,10 @@ class VoiceProfile:
     clone_mode: str
     directory: Path
     notes: str = ""
+    emotion_enabled: bool = True
+    emotion: str = "neutral"
+    sound_enabled: bool = False
+    sounds: tuple[str, ...] = ()
 
     def public(self) -> dict:
         result = asdict(self)
@@ -42,6 +48,19 @@ def _safe_name(value: str) -> str:
     if not cleaned:
         raise ValueError("имя профиля пусто после безопасной нормализации")
     return cleaned.lower()
+
+
+def _normalize_sounds(value) -> tuple[str, ...]:
+    if value is None:
+        requested = []
+    elif isinstance(value, str):
+        requested = [item.strip().lower() for item in value.split(",") if item.strip()]
+    else:
+        requested = [str(item).strip().lower() for item in value if str(item).strip()]
+    unknown = sorted(set(requested) - ALLOWED_SOUNDS)
+    if unknown:
+        raise ValueError(f"unsupported sound capabilities: {', '.join(unknown)}")
+    return tuple(sound for sound in SOUND_TYPES if sound in requested)
 
 
 def validate_audio(path: Path, ref_text: str = "") -> dict:
@@ -110,18 +129,26 @@ class VoiceLibrary:
             try:
                 data = json.loads(metadata_path.read_text(encoding="utf-8"))
                 display = str(data["display_name"])
+                emotion = str(data.get("emotion", data.get("style", "neutral"))).lower()
+                if emotion not in ALLOWED_STYLES:
+                    raise ValueError(f"unsupported emotion capability: {emotion}")
+                sounds = _normalize_sounds(data.get("sounds", []))
                 profile = VoiceProfile(
                     voice_id=f"clone:{display}",
                     character=str(data["character"]),
                     profile_id=str(data["profile_id"]),
                     display_name=display,
-                    style=str(data.get("style", "neutral")),
+                    style=emotion,
                     reference_audio=str(data.get("reference_audio", "reference.wav")),
                     ref_text=str(data.get("ref_text", "")),
                     language=str(data.get("language", "Russian")),
                     clone_mode=str(data.get("clone_mode", "icl")),
                     notes=str(data.get("notes", "")),
                     directory=metadata_path.parent,
+                    emotion_enabled=bool(data.get("emotion_enabled", True)),
+                    emotion=emotion,
+                    sound_enabled=bool(data.get("sound_enabled", bool(sounds))),
+                    sounds=sounds,
                 )
                 found[profile.voice_id.lower()] = profile
                 found[profile.profile_id.lower()] = profile
@@ -146,11 +173,44 @@ class VoiceLibrary:
         return profile
 
     def find_style(self, character: str, style: str, fallback: VoiceProfile) -> VoiceProfile:
-        unique = {profile.profile_id: profile for profile in self.profiles.values()}.values()
+        unique = sorted(
+            {profile.profile_id: profile for profile in self.profiles.values()}.values(),
+            key=lambda item: (item.profile_id.lower(), item.display_name.lower()),
+        )
         for profile in unique:
-            if profile.character.lower() == character.lower() and profile.style.lower() == style.lower() and profile.reference_path.exists():
+            if (
+                profile.character.lower() == character.lower()
+                and profile.emotion_enabled
+                and profile.emotion.lower() == style.lower()
+                and profile.reference_path.exists()
+            ):
                 return profile
         return fallback
+
+    def find_sound(self, character: str, sound_type: str, preferred_emotion: str | None = None) -> VoiceProfile | None:
+        requested = sound_type.strip().lower()
+        if requested not in ALLOWED_SOUNDS:
+            raise ValueError(f"unsupported sound capability: {sound_type}")
+        candidates = sorted(
+            (
+                profile
+                for profile in {item.profile_id: item for item in self.profiles.values()}.values()
+                if profile.character.lower() == character.lower()
+                and profile.sound_enabled
+                and requested in profile.sounds
+                and profile.reference_path.exists()
+            ),
+            key=lambda item: (item.profile_id.lower(), item.display_name.lower()),
+        )
+        if preferred_emotion:
+            matching = [
+                profile
+                for profile in candidates
+                if profile.emotion_enabled and profile.emotion.lower() == preferred_emotion.lower()
+            ]
+            if matching:
+                return matching[0]
+        return candidates[0] if candidates else None
 
     def resolve_family_neutral(self, selected: VoiceProfile, configured_fallback: str | None = None) -> VoiceProfile:
         """Return the deterministic neutral base for a selected voice family."""
@@ -174,8 +234,22 @@ class VoiceLibrary:
         if not validation["valid"]:
             raise ValueError("; ".join(validation["errors"]))
         character_dir = _safe_name(str(metadata["character"]))
-        style_dir = _safe_name(str(metadata.get("style", "neutral")))
-        target = self.profiles_root / character_dir / style_dir
+        emotion = str(metadata.get("emotion", metadata.get("style", "neutral"))).lower()
+        if emotion not in ALLOWED_STYLES:
+            raise ValueError(f"unsupported emotion capability: {emotion}")
+        emotion_enabled = bool(metadata.get("emotion_enabled", True))
+        sounds = _normalize_sounds(metadata.get("sounds", []))
+        sound_enabled = bool(metadata.get("sound_enabled", bool(sounds)))
+        if sound_enabled and not sounds:
+            raise ValueError("sound profile is enabled but no sound capabilities were selected")
+        if not emotion_enabled and not sound_enabled:
+            raise ValueError("enable at least one emotion or sound profile capability")
+        if not sound_enabled:
+            sounds = ()
+        style_dir = _safe_name(emotion)
+        profile_id = str(metadata.get("profile_id") or f"{character_dir}_{style_dir}")
+        target_dir = style_dir if emotion_enabled else _safe_name(profile_id)
+        target = self.profiles_root / character_dir / target_dir
         if target.exists() and any(target.iterdir()):
             if not overwrite:
                 raise FileExistsError(f"профиль уже существует: {target}")
@@ -189,9 +263,13 @@ class VoiceLibrary:
         shutil.copy2(source, reference)
         payload = {
             "character": metadata["character"],
-            "profile_id": metadata.get("profile_id") or f"{character_dir}_{style_dir}",
+            "profile_id": profile_id,
             "display_name": metadata.get("display_name") or f"{metadata['character']}{style_dir.title()}",
-            "style": metadata.get("style", "neutral"),
+            "style": emotion,
+            "emotion_enabled": emotion_enabled,
+            "emotion": emotion,
+            "sound_enabled": sound_enabled,
+            "sounds": list(sounds),
             "reference_audio": "reference.wav",
             "ref_text": metadata["ref_text"],
             "language": metadata.get("language", "Russian"),

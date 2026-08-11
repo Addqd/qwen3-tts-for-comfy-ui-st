@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from qwen3_tts_st.app import create_app
 from qwen3_tts_st.config import AppConfig, load_config
 from qwen3_tts_st.emotion import (
+    ALLOWED_SOUNDS,
     ALLOWED_STYLES,
     parse_emotion_script,
     parse_emotion_script_detailed,
@@ -83,6 +84,28 @@ def test_all_ten_delivery_styles_remain_allowlisted():
         "neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense",
         "pleasure", "intimate",
     }
+
+
+def test_performance_router_orders_speech_and_sounds_without_leaking_service_tags():
+    text = (
+        '[voice:pleasure] "Да... продолжай." [sound:moan] '
+        '[sound:unknown] [sound: laugh] '
+        '[voice:breathy] "Не останавливайся..." [sound:pant]'
+    )
+    segments, warnings = parse_emotion_script_detailed(text)
+
+    assert ALLOWED_SOUNDS == {"laugh", "giggle", "gasp", "sigh", "pant", "moan"}
+    assert [
+        (item.kind, item.style, item.text, item.sound_type, item.preferred_style)
+        for item in segments
+    ] == [
+        ("dialogue", "pleasure", "Да... продолжай.", None, None),
+        ("sound", "pleasure", "", "moan", "pleasure"),
+        ("dialogue", "breathy", "Не останавливайся...", None, None),
+        ("sound", "breathy", "", "pant", "breathy"),
+    ]
+    assert warnings == ["unknown_sound_tag_removed:unknown", "malformed_sound_tag_removed"]
+    assert all("[sound:" not in item.text.lower() for item in segments)
 
 
 @pytest.mark.parametrize(
@@ -261,6 +284,37 @@ def test_missing_emotion_dynamically_falls_back_then_uses_new_profile(tmp_path, 
     happy = _add_profile(service, tmp_path, "happy")
     asyncio.run(service.synthesize(_request('[voice:happy] "Привет!"', neutral)))
     assert selected[-1] == happy
+
+
+def test_missing_sound_is_skipped_while_surrounding_speech_is_returned(tmp_path, monkeypatch):
+    service = TTSService(_make_config(tmp_path))
+    _add_profile(service, tmp_path, "neutral")
+    pleasure = _add_profile(service, tmp_path, "pleasure")
+    captured: list[tuple[str, str]] = []
+    original = service.worker.synthesize
+
+    def recording_synthesize(text, profile, language):
+        captured.append((text, profile.voice_id))
+        return original(text, profile, language)
+
+    monkeypatch.setattr(service.worker, "synthesize", recording_synthesize)
+    payload, media_type, metadata = asyncio.run(
+        service.synthesize(
+            _request(
+                '[voice:pleasure] "До звука." [sound:moan] [voice:pleasure] "После звука."',
+                pleasure,
+            )
+        )
+    )
+
+    assert media_type == "audio/wav"
+    assert payload.startswith(b"RIFF")
+    assert [text for text, _ in captured] == ["До звука.", "После звука."]
+    assert [voice for _, voice in captured] == [pleasure, pleasure]
+    assert metadata["segments"] == 2
+    assert metadata["segment_types"] == ["dialogue", "sound", "dialogue"]
+    assert metadata["router_warnings"] == ["missing_sound_profile:moan"]
+    assert all("sound:" not in text.lower() for text, _ in captured)
 
 
 def test_new_styles_fall_back_then_are_selected_after_reload(tmp_path, monkeypatch):

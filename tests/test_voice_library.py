@@ -51,6 +51,71 @@ def test_create_preserves_reference_sample_rate(tmp_path):
     assert sf.info(profile.reference_path).samplerate == 44100
 
 
+def test_performance_capabilities_persist_and_resolve_deterministically(tmp_path):
+    source = tmp_path / "source.wav"
+    make_wav(source)
+    root = tmp_path / "library"
+    library = VoiceLibrary(root)
+
+    legacy_dir = root / "profiles" / "legacy" / "neutral"
+    legacy_dir.mkdir(parents=True)
+    shutil.copy2(source, legacy_dir / "reference.wav")
+    (legacy_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "character": "Legacy",
+                "profile_id": "legacy_neutral",
+                "display_name": "LegacyNeutral",
+                "style": "neutral",
+                "reference_audio": "reference.wav",
+                "ref_text": "Старый профиль.",
+                "language": "Russian",
+                "clone_mode": "icl",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def create(profile_id, emotion, sounds, *, character="Performer", emotion_enabled=True):
+        return library.create(
+            source,
+            {
+                "character": character,
+                "profile_id": profile_id,
+                "display_name": profile_id,
+                "style": emotion,
+                "emotion_enabled": emotion_enabled,
+                "sound_enabled": bool(sounds),
+                "sounds": sounds,
+                "ref_text": "Точный текст референса.",
+            },
+        )[0]
+
+    pleasure = create("a_pleasure", "pleasure", ["moan", "pant"])
+    intimate = create("b_intimate", "intimate", ["moan", "sigh"])
+    create("z_laugh", "neutral", ["laugh"], emotion_enabled=False)
+    alpha_laugh = create("a_laugh", "neutral", ["laugh"], emotion_enabled=False)
+    create("other_giggle", "happy", ["giggle"], character="Other")
+
+    reloaded = VoiceLibrary(root)
+    legacy = reloaded.resolve("legacy_neutral")
+    assert legacy.emotion_enabled is True
+    assert legacy.emotion == "neutral"
+    assert legacy.sound_enabled is False
+    assert legacy.sounds == ()
+    persisted = json.loads((pleasure.directory / "metadata.json").read_text(encoding="utf-8"))
+    assert persisted["emotion_enabled"] is True
+    assert persisted["emotion"] == "pleasure"
+    assert persisted["sound_enabled"] is True
+    assert persisted["sounds"] == ["pant", "moan"]
+    assert reloaded.find_sound("Performer", "moan", "pleasure").profile_id == pleasure.profile_id
+    assert reloaded.find_sound("Performer", "moan", "intimate").profile_id == intimate.profile_id
+    assert reloaded.find_sound("Performer", "moan", "happy").profile_id == pleasure.profile_id
+    assert reloaded.find_sound("Performer", "laugh").profile_id == alpha_laugh.profile_id
+    assert reloaded.find_sound("Performer", "giggle") is None
+
+
 def test_overwrite_backups_are_preserved_but_never_indexed(tmp_path):
     first_source = tmp_path / "first.wav"
     second_source = tmp_path / "second.wav"

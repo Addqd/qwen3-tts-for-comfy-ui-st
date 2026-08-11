@@ -16,7 +16,7 @@ import numpy as np
 
 
 CATEGORY = "Qwen TTS API"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 INHERIT_SERVER_MODEL = "Inherit Server model"
 SERVER_MODEL_OPTIONS = (
     "Backend Default (tts-1-ru)",
@@ -49,9 +49,13 @@ CHUNKING_OPTIONS = (BACKEND_DEFAULT, "Semantic / prosody-aware", "Off")
 ALLOWED_STYLES = (
     "neutral", "soft", "whisper", "breathy", "happy", "sad", "angry", "tense", "pleasure", "intimate"
 )
+SOUND_TYPES = ("laugh", "giggle", "gasp", "sigh", "pant", "moan")
 TAG_RE = re.compile(r"\[voice:([a-z][a-z0-9_-]*)\]", re.I)
 SERVICE_TAG_RE = re.compile(r"\[\s*voice(?=\s|:|\])(?:\s*:\s*|\s+)?([^\]\r\n]*)\]", re.I)
 UNTERMINATED_TAG_RE = re.compile(r"\[\s*voice(?=\s|:)(?:\s*:\s*|\s+)[a-z0-9_-]*", re.I)
+SOUND_TAG_RE = re.compile(r"\[sound:([a-z][a-z0-9_-]*)\]", re.I)
+SOUND_SERVICE_TAG_RE = re.compile(r"\[\s*sound(?=\s|:|\])(?:\s*:\s*|\s+)?([^\]\r\n]*)\]", re.I)
+UNTERMINATED_SOUND_TAG_RE = re.compile(r"\[\s*sound(?=\s|:)(?:\s*:\s*|\s+)[a-z0-9_-]*", re.I)
 
 
 def _is_escaped(text: str, position: int) -> bool:
@@ -64,7 +68,9 @@ def _is_escaped(text: str, position: int) -> bool:
 
 
 def _strip_service_tags(text: str) -> str:
-    return UNTERMINATED_TAG_RE.sub("", SERVICE_TAG_RE.sub("", text)).strip()
+    value = UNTERMINATED_TAG_RE.sub("", SERVICE_TAG_RE.sub("", text))
+    value = UNTERMINATED_SOUND_TAG_RE.sub("", SOUND_SERVICE_TAG_RE.sub("", value))
+    return value.strip()
 
 
 def _tag_at(text: str, position: int):
@@ -72,14 +78,26 @@ def _tag_at(text: str, position: int):
     if strict:
         requested = strict.group(1).lower()
         if requested in ALLOWED_STYLES:
-            return strict.end(), requested, []
-        return strict.end(), "neutral", ["unknown_voice_tag_neutral_fallback"]
+            return strict.end(), "voice_tag", requested, []
+        return strict.end(), "voice_tag", "neutral", ["unknown_voice_tag_neutral_fallback"]
+    sound = SOUND_TAG_RE.match(text, position)
+    if sound:
+        requested = sound.group(1).lower()
+        if requested in SOUND_TYPES:
+            return sound.end(), "sound", requested, []
+        return sound.end(), "service", "", [f"unknown_sound_tag_removed:{requested}"]
     malformed = SERVICE_TAG_RE.match(text, position)
     if malformed:
-        return malformed.end(), "neutral", ["malformed_voice_tag_neutral_fallback"]
+        return malformed.end(), "voice_tag", "neutral", ["malformed_voice_tag_neutral_fallback"]
     unterminated = UNTERMINATED_TAG_RE.match(text, position)
     if unterminated:
-        return unterminated.end(), "neutral", ["unterminated_voice_tag_removed"]
+        return unterminated.end(), "voice_tag", "neutral", ["unterminated_voice_tag_removed"]
+    malformed_sound = SOUND_SERVICE_TAG_RE.match(text, position)
+    if malformed_sound:
+        return malformed_sound.end(), "service", "", ["malformed_sound_tag_removed"]
+    unterminated_sound = UNTERMINATED_SOUND_TAG_RE.match(text, position)
+    if unterminated_sound:
+        return unterminated_sound.end(), "service", "", ["unterminated_sound_tag_removed"]
     return None
 
 
@@ -94,8 +112,8 @@ def _quote_aware_segments(text: str):
             if tag:
                 if cursor < position:
                     tokens.append(("text", text[cursor:position], None, []))
-                position, style, warnings = tag
-                tokens.append(("tag", "", style, warnings))
+                position, kind, tag_value, warnings = tag
+                tokens.append((kind, "", tag_value, warnings))
                 cursor = position
                 continue
         if text[position] == '"' and not _is_escaped(text, position):
@@ -121,12 +139,17 @@ def _quote_aware_segments(text: str):
     segments = []
     warnings = []
     pending_style = None
-    for kind, value, token_style, token_warnings in tokens:
+    for kind, value, token_value, token_warnings in tokens:
         warnings.extend(token_warnings)
-        if kind == "tag":
+        if kind == "voice_tag":
             if pending_style is not None:
                 warnings.append("multiple_voice_tags_last_wins")
-            pending_style = token_style
+            pending_style = token_value
+            continue
+        if kind == "sound":
+            segments.append({"kind": "sound", "style": "neutral", "text": "", "sound_type": token_value})
+            continue
+        if kind == "service":
             continue
         clean = _strip_service_tags(value).replace('\\"', '"').strip()
         if kind == "dialogue":
@@ -145,6 +168,15 @@ def _quote_aware_segments(text: str):
                 segments.append({"kind": "narration", "style": "neutral", "text": clean})
     if pending_style is not None:
         warnings.append("voice_tag_ignored_no_following_quoted_dialogue")
+    for index, segment in enumerate(segments):
+        if segment["kind"] != "sound":
+            continue
+        previous = next((item for item in reversed(segments[:index]) if item["kind"] != "sound"), None)
+        following = next((item for item in segments[index + 1 :] if item["kind"] != "sound"), None)
+        context = previous or following
+        if context is not None:
+            segment["style"] = context["style"]
+            segment["preferred_style"] = context["style"]
     return segments, list(dict.fromkeys(warnings))
 
 
@@ -477,7 +509,15 @@ class QwenTTSCloneVoiceNode:
             "ref_text": ("STRING", {"multiline": True}),
             "profile_name": ("STRING", {"default": "CharacterNeutral"}),
             "character_name": ("STRING", {"default": "Character"}),
+            "emotion_enabled": ("BOOLEAN", {"default": True}),
             "style": (list(ALLOWED_STYLES), {"default": "neutral"}),
+            "sound_enabled": ("BOOLEAN", {"default": False}),
+            "sound_laugh": ("BOOLEAN", {"default": False}),
+            "sound_giggle": ("BOOLEAN", {"default": False}),
+            "sound_gasp": ("BOOLEAN", {"default": False}),
+            "sound_sigh": ("BOOLEAN", {"default": False}),
+            "sound_pant": ("BOOLEAN", {"default": False}),
+            "sound_moan": ("BOOLEAN", {"default": False}),
             "language": (["Russian"], {"default": "Russian"}),
             "clone_mode": (["icl", "x_vector"], {"default": "icl"}),
             "consent_confirmed": ("BOOLEAN", {"default": False}),
@@ -489,13 +529,49 @@ class QwenTTSCloneVoiceNode:
     FUNCTION = "clone"
     CATEGORY = CATEGORY
 
-    def clone(self, server, reference_audio, ref_text, profile_name, character_name, style, language, clone_mode, consent_confirmed, overwrite):
+    def clone(
+        self,
+        server,
+        reference_audio,
+        ref_text,
+        profile_name,
+        character_name,
+        emotion_enabled,
+        style,
+        sound_enabled,
+        sound_laugh,
+        sound_giggle,
+        sound_gasp,
+        sound_sigh,
+        sound_pant,
+        sound_moan,
+        language,
+        clone_mode,
+        consent_confirmed,
+        overwrite,
+    ):
         if not consent_confirmed:
             raise ValueError("Confirm permission to use this voice before cloning")
+        selected_sounds = [
+            sound
+            for sound, enabled in zip(
+                SOUND_TYPES,
+                (sound_laugh, sound_giggle, sound_gasp, sound_sigh, sound_pant, sound_moan),
+            )
+            if enabled
+        ]
+        if sound_enabled and not selected_sounds:
+            raise ValueError("Enable at least one sound capability")
+        if not emotion_enabled and not sound_enabled:
+            raise ValueError("Enable at least one emotion or sound profile capability")
         encoded = base64.b64encode(_audio_to_wav_bytes(reference_audio)).decode("ascii")
         result, _ = _json_request(server, "/v1/audio/voice-clone", {
             "reference_audio_base64": encoded, "ref_text": ref_text, "profile_name": profile_name,
-            "character_name": character_name, "style": style, "language": language,
+            "character_name": character_name, "style": style,
+            "emotion_enabled": bool(emotion_enabled),
+            "sound_enabled": bool(sound_enabled),
+            "sounds": selected_sounds if sound_enabled else [],
+            "language": language,
             "clone_mode": clone_mode, "consent_confirmed": True, "overwrite": overwrite,
         })
         return result["voice_id"], json.dumps(result["validation"], ensure_ascii=False), json.dumps(result["metadata"], ensure_ascii=False)
@@ -543,18 +619,20 @@ class QwenTTSEmotionScriptNode:
             raise ValueError("character_profile_mapping must be a JSON object")
         segments, warnings = _quote_aware_segments(text)
         for item in segments:
-            item["voice"] = mapping.get(item["style"]) or mapping.get("neutral")
+            item["voice"] = None if item["kind"] == "sound" else mapping.get(item["style"]) or mapping.get("neutral")
         normalized_parts = []
         for item in segments:
-            if item["kind"] == "dialogue":
+            if item["kind"] == "sound":
+                normalized_parts.append(f"[sound:{item['sound_type']}]")
+            elif item["kind"] == "dialogue":
                 escaped = item["text"].replace('"', '\\"')
                 prefix = "" if item["style"] == "neutral" else f"[voice:{item['style']}] "
                 normalized_parts.append(f'{prefix}"{escaped}"')
             else:
                 normalized_parts.append(item["text"])
         normalized = "\n".join(normalized_parts)
-        clean = " ".join(item["text"] for item in segments)
-        styles = ", ".join(dict.fromkeys(item["style"] for item in segments))
+        clean = " ".join(item["text"] for item in segments if item["text"])
+        styles = ", ".join(dict.fromkeys(item["style"] for item in segments if item["kind"] != "sound"))
         result = (normalized, json.dumps(segments, ensure_ascii=False), clean, styles)
         return _ui_result("qwen_tts_emotion", result, {"segments": segments, "clean_text": clean, "styles": styles, "warnings": warnings})
 

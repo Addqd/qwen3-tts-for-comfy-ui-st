@@ -6,7 +6,7 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from qwen3_tts_st.audio import pad_edges, stitch
+from qwen3_tts_st.audio import AudioPart, pad_edges, stitch
 from qwen3_tts_st.config import AppConfig, load_config
 from qwen3_tts_st.resources import ResourceSnapshot, choose_mode
 from qwen3_tts_st.service import TTSService
@@ -38,7 +38,7 @@ def test_one_sample_overlap_blends_both_parts():
         crossfade_ms=1,
     )
     assert rate == 1000
-    assert output == pytest.approx([0.5])
+    assert output == pytest.approx([(0.2 + 0.8) / np.sqrt(2)])
 
 
 def test_internal_join_has_no_artificial_silence_and_padding_is_outer_only():
@@ -51,6 +51,42 @@ def test_internal_join_has_no_artificial_silence_and_padding_is_outer_only():
     assert np.all(padded[:100] == 0)
     assert np.array_equal(padded[100:300], joined)
     assert np.all(padded[300:] == 0)
+
+
+def test_performance_boundaries_trim_only_edges_and_bound_gain_correction():
+    rate = 1000
+    pulse = np.tile(np.array([0.2, -0.2], dtype=np.float32), 30)
+    first = np.concatenate((np.zeros(20), pulse, np.zeros(30), pulse, np.zeros(20))).astype(np.float32)
+    second = np.concatenate(
+        (np.zeros(20), np.tile(np.array([0.01, -0.01], dtype=np.float32), 50), np.zeros(20))
+    ).astype(np.float32)
+    config = {
+        "edge_window_ms": 40,
+        "edge_silence_threshold": 0.0025,
+        "edge_min_silence_ms": 12,
+        "edge_safety_ms": 2,
+        "dc_offset_threshold": 0.01,
+        "level_window_ms": 20,
+        "level_rms_floor": 0.003,
+        "max_gain_correction_db": 2.0,
+        "crossfade_ms": {"speech_to_sound": 10},
+    }
+
+    output, output_rate = stitch(
+        [
+            AudioPart(first, rate, "speech", "profile-a"),
+            AudioPart(second, rate, "sound", "profile-b"),
+        ],
+        boundary_config=config,
+    )
+
+    assert output_rate == rate
+    assert np.isfinite(output).all()
+    assert np.max(np.abs(output)) <= 1.0
+    assert int(np.argmax(np.abs(output) > 1e-7)) <= 2
+    assert int(np.argmax(np.abs(output[::-1]) > 1e-7)) <= 2
+    assert np.count_nonzero(np.abs(output) < 1e-7) >= 25  # internal pause remains
+    assert np.max(np.abs(output[-80:])) <= 0.01 * 10 ** (2.0 / 20.0) * 1.001
 
 
 @pytest.mark.asyncio

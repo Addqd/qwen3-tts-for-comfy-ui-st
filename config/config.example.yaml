@@ -150,6 +150,30 @@ pauses:
   crossfade_ms: 8
   edge_fade_ms: 5
 
+performance:
+  sound_carriers:
+    laugh: "Ха-ха-ха..."
+    giggle: "Хи-хи..."
+    gasp: "Ах!"
+    sigh: "А-а..."
+    pant: "Ха... ха..."
+    moan: "М-м-м..."
+  boundaries:
+    edge_window_ms: 40
+    edge_silence_threshold: 0.0025
+    edge_min_silence_ms: 12
+    edge_safety_ms: 4
+    dc_offset_threshold: 0.01
+    level_window_ms: 20
+    level_rms_floor: 0.003
+    max_gain_correction_db: 2.5
+    crossfade_ms:
+      same_profile_speech: 15
+      different_emotion_speech: 45
+      speech_to_sound: 30
+      sound_to_speech: 30
+      sound_to_sound: 30
+
 preprocessing:
   mode: all
   remove_markdown: true
