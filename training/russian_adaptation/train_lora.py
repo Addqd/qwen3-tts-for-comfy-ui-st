@@ -6,8 +6,10 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import traceback
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from accelerate import Accelerator
 from huggingface_hub import snapshot_download
 from peft import LoraConfig, PeftModel, get_peft_model
@@ -24,6 +27,14 @@ from torch.utils.data import DataLoader
 from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
 from training.russian_adaptation.common import PROJECT_ROOT, iter_jsonl, load_plan, project_path, write_json_atomic
 from training.russian_adaptation.dataset import RussianAdaptationDataset
+
+
+TRAINING_SEMANTICS_VERSION = "qwen3-tts-selective-lora-v2-aligned-loss"
+ROOT_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".pt", ".pth")
+ROOT_MODEL_WEIGHT_PATTERN = re.compile(
+    r"^(?:model(?:-\d+-of-\d+)?\.safetensors|model\.safetensors\.index\.json|"
+    r"pytorch_model(?:-\d+-of-\d+)?\.bin|pytorch_model\.bin\.index\.json)$"
+)
 
 
 def utc_now() -> str:
@@ -71,6 +82,59 @@ def validate_trainable_parameters(model: nn.Module) -> dict[str, Any]:
     }
 
 
+def ensure_finite_tensor(name: str, value: torch.Tensor) -> None:
+    if not bool(torch.isfinite(value.detach()).all()):
+        raise RuntimeError(f"Non-finite {name} detected; refusing to continue before backward/optimizer step")
+
+
+def configure_subtalker_precision(talker: nn.Module) -> None:
+    if any(parameter.requires_grad for parameter in talker.code_predictor.parameters()):
+        raise RuntimeError("Code predictor must remain frozen during selective LoRA training")
+    talker.code_predictor.to(dtype=torch.float32)
+
+
+def aligned_subtalker_cross_entropy(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    if logits.ndim != 3 or targets.ndim != 2 or logits.shape[:2] != targets.shape:
+        raise RuntimeError(
+            f"Subtalker logits/target shape mismatch: logits={tuple(logits.shape)}, targets={tuple(targets.shape)}"
+        )
+    if targets.shape[1] != 15:
+        raise RuntimeError(f"Expected all 15 subtalker codebook targets, got {targets.shape[1]}")
+    ensure_finite_tensor("subtalker logits", logits)
+    loss = F.cross_entropy(logits.float().reshape(-1, logits.shape[-1]), targets.reshape(-1))
+    ensure_finite_tensor("subtalker loss", loss)
+    return loss
+
+
+def forward_aligned_subtalker(
+    talker: nn.Module, codec_ids: torch.Tensor, talker_hidden_states: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    predictor = talker.code_predictor
+    predictor_dtype = next(predictor.parameters()).dtype
+    with torch.autocast(device_type=talker_hidden_states.device.type, enabled=False):
+        inputs = [talker_hidden_states.to(dtype=predictor_dtype).unsqueeze(1)]
+        for index in range(15):
+            if index == 0:
+                embedding = talker.get_input_embeddings()(codec_ids[:, :1])
+            else:
+                embedding = predictor.get_input_embeddings()[index - 1](codec_ids[:, index : index + 1])
+            inputs.append(embedding.to(dtype=predictor_dtype))
+        outputs = predictor.forward_finetune(inputs_embeds=torch.cat(inputs, dim=1), labels=None)
+        logits = outputs.logits
+        loss = aligned_subtalker_cross_entropy(logits, codec_ids[:, 1:])
+    return logits, loss
+
+
+def align_subtalker_timesteps(
+    hidden_states: torch.Tensor, codec_mask: torch.Tensor, codec_ids: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    talker_hidden_states = hidden_states[:, :-1, :][codec_mask[:, 1:]]
+    talker_codec_ids = codec_ids[codec_mask]
+    if talker_hidden_states.shape[0] != talker_codec_ids.shape[0]:
+        raise RuntimeError("Main-talker hidden states are not aligned with codec timesteps")
+    return talker_hidden_states, talker_codec_ids
+
+
 def build_initial_talker_embeddings(
     talker: nn.Module,
     input_text_ids: torch.Tensor,
@@ -116,20 +180,72 @@ class SelectiveTrainingModel(nn.Module):
         )
         for index in range(1, 16):
             codec_embedding = core.talker.code_predictor.get_input_embeddings()[index - 1](codec_ids[:, :, index])
-            input_embeddings = input_embeddings + codec_embedding * codec_mask.unsqueeze(-1)
+            input_embeddings = input_embeddings + codec_embedding.to(input_embeddings.dtype) * codec_mask.unsqueeze(-1)
 
         outputs = core.talker(
-            inputs_embeds=input_embeddings[:, :-1, :],
-            attention_mask=attention_mask[:, :-1],
-            labels=codec_0_labels[:, 1:],
+            inputs_embeds=input_embeddings,
+            attention_mask=attention_mask,
+            labels=codec_0_labels,
             output_hidden_states=True,
         )
+        ensure_finite_tensor("main talker loss", outputs.loss)
         hidden_states = outputs.hidden_states[0][-1]
-        talker_hidden_states = hidden_states[codec_mask[:, :-1]]
-        talker_codec_ids = codec_ids[codec_mask]
-        _, subtalker_loss = core.talker.forward_sub_talker_finetune(talker_codec_ids, talker_hidden_states)
+        talker_hidden_states, talker_codec_ids = align_subtalker_timesteps(hidden_states, codec_mask, codec_ids)
+        _, subtalker_loss = forward_aligned_subtalker(core.talker, talker_codec_ids, talker_hidden_states)
         total_loss = outputs.loss + self.subtalker_weight * subtalker_loss
+        ensure_finite_tensor("total loss", total_loss)
         return total_loss, outputs.loss.detach(), subtalker_loss.detach()
+
+
+def validate_resume_state(state: dict[str, Any], checkpoint: Path) -> None:
+    version = state.get("training_semantics_version")
+    if version != TRAINING_SEMANTICS_VERSION:
+        found = "missing" if version is None else repr(version)
+        raise RuntimeError(
+            f"Cannot resume {checkpoint}: training semantics version is {found}; "
+            f"expected {TRAINING_SEMANTICS_VERSION!r}. Start a fresh run and preserve the old checkpoint for inspection."
+        )
+    metrics = state.get("last_metrics") or {}
+    for name in ("loss", "first_code_loss", "subtalker_loss"):
+        if name in metrics and not math.isfinite(float(metrics[name])):
+            raise RuntimeError(f"Cannot resume {checkpoint}: saved {name} is non-finite")
+
+
+def ensure_finite_state_tensors(value: Any, context: str) -> None:
+    if torch.is_tensor(value):
+        if (value.is_floating_point() or value.is_complex()) and not bool(torch.isfinite(value).all()):
+            raise RuntimeError(f"Cannot resume: {context} contains non-finite tensors")
+        return
+    if isinstance(value, dict):
+        for nested in value.values():
+            ensure_finite_state_tensors(nested, context)
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            ensure_finite_state_tensors(nested, context)
+
+
+def validate_train_eval_disjoint(train_rows: list[dict[str, Any]], eval_rows: list[dict[str, Any]]) -> None:
+    def normalized_text(row: dict[str, Any]) -> str:
+        text = unicodedata.normalize("NFKC", str(row.get("text") or "")).casefold()
+        return re.sub(r"\s+", " ", text).strip()
+
+    for label, value_of in (
+        ("source_key", lambda row: str(row.get("source_key") or "").strip()),
+        ("normalized text", normalized_text),
+    ):
+        train_values: dict[str, str] = {}
+        for row in train_rows:
+            value = value_of(row)
+            if value:
+                train_values.setdefault(value, str(row.get("id") or "<unknown>"))
+        for row in eval_rows:
+            value = value_of(row)
+            if value and value in train_values:
+                preview = value if len(value) <= 80 else value[:77] + "..."
+                raise RuntimeError(
+                    f"Train/eval overlap by {label}: train={train_values[value]}, "
+                    f"eval={row.get('id') or '<unknown>'}, value={preview!r}"
+                )
 
 
 def latest_resume_checkpoint(resume_root: Path) -> Path | None:
@@ -147,6 +263,7 @@ def save_resume_checkpoint(
     resume_root: Path,
     micro_step: int,
     optimizer_step: int,
+    last_metrics: dict[str, Any],
 ) -> None:
     accelerator.wait_for_everyone()
     if not accelerator.is_main_process:
@@ -160,7 +277,14 @@ def save_resume_checkpoint(
         torch.save(accelerator.scaler.state_dict(), destination / "scaler.pt")
     write_json_atomic(
         destination / "trainer_state.json",
-        {"epoch": 0, "micro_step": micro_step, "optimizer_step": optimizer_step, "saved_at": utc_now()},
+        {
+            "training_semantics_version": TRAINING_SEMANTICS_VERSION,
+            "epoch": 0,
+            "micro_step": micro_step,
+            "optimizer_step": optimizer_step,
+            "last_metrics": last_metrics,
+            "saved_at": utc_now(),
+        },
     )
 
 
@@ -174,6 +298,8 @@ def append_metric(path: Path, row: dict[str, Any]) -> None:
 
 @torch.no_grad()
 def evaluate(model: nn.Module, dataloader: DataLoader, accelerator: Accelerator) -> dict[str, float]:
+    if len(dataloader) == 0:
+        raise RuntimeError("Evaluation dataloader is empty; refusing to start or finish training without evaluation")
     model.eval()
     losses: list[float] = []
     primary: list[float] = []
@@ -192,15 +318,33 @@ def evaluate(model: nn.Module, dataloader: DataLoader, accelerator: Accelerator)
 
 
 def copy_non_weight_assets(source: Path, destination: Path) -> None:
-    weight_suffixes = (".safetensors", ".bin", ".pt", ".pth")
     for path in source.rglob("*"):
         relative = path.relative_to(source)
         target = destination / relative
         if path.is_dir():
             target.mkdir(parents=True, exist_ok=True)
-        elif not path.name.endswith(weight_suffixes) and path.name != "model.safetensors.index.json":
+        elif not (relative.parent == Path(".") and ROOT_MODEL_WEIGHT_PATTERN.fullmatch(path.name)):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
+
+
+def validate_final_checkpoint_structure(base_snapshot: Path, checkpoint: Path) -> None:
+    root_weights = [
+        path for path in checkpoint.iterdir() if path.is_file() and ROOT_MODEL_WEIGHT_PATTERN.fullmatch(path.name)
+    ]
+    if not root_weights:
+        raise RuntimeError("Final checkpoint has no root model weights")
+    source_speech_tokenizer = base_snapshot / "speech_tokenizer"
+    if not source_speech_tokenizer.is_dir():
+        raise RuntimeError("Pinned Base snapshot is missing the speech_tokenizer subtree")
+    required_files = [path.relative_to(base_snapshot) for path in source_speech_tokenizer.rglob("*") if path.is_file()]
+    if not required_files:
+        raise RuntimeError("Pinned Base snapshot has an empty speech_tokenizer subtree")
+    missing = [relative.as_posix() for relative in required_files if not (checkpoint / relative).is_file()]
+    if missing:
+        raise RuntimeError(f"Final checkpoint is missing required speech_tokenizer assets: {missing[:5]}")
+    if not any(relative.name.endswith(ROOT_WEIGHT_SUFFIXES) for relative in required_files):
+        raise RuntimeError("Pinned Base snapshot speech_tokenizer has no model weights")
 
 
 def save_final_checkpoint(
@@ -224,6 +368,7 @@ def save_final_checkpoint(
 
     unwrapped = accelerator.unwrap_model(model)
     unwrapped.adapter_model.to("cpu")
+    unwrapped.adapter_model.get_base_model().talker.code_predictor.to(dtype=torch.float16)
     merged = unwrapped.adapter_model.merge_and_unload(safe_merge=True)
     if getattr(merged.config, "tts_model_type", None) != "base":
         raise RuntimeError("Merged checkpoint unexpectedly lost Base model type")
@@ -234,8 +379,38 @@ def save_final_checkpoint(
         raise RuntimeError("Saved checkpoint is not a Base voice-cloning model")
     if saved_config.get("tts_model_size") != model_spec["expected_tts_model_size"]:
         raise RuntimeError("Saved checkpoint model size mismatch")
+    validate_final_checkpoint_structure(base_snapshot, temporary)
     temporary.replace(final_path)
     return final_path
+
+
+def validate_cuda_training_state(accelerator: Accelerator, model: nn.Module, batch: dict[str, torch.Tensor]) -> None:
+    if accelerator.device.type != "cuda":
+        raise RuntimeError(f"CUDA training is required, but Accelerator selected {accelerator.device}")
+    trainable = next(((name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad), None)
+    if trainable is None or "lora_" not in trainable[0]:
+        raise RuntimeError("No intended trainable LoRA parameter is available for the CUDA guard")
+    trainable_name, trainable_parameter = trainable
+    if trainable_parameter.device.type != "cuda":
+        raise RuntimeError(f"Trainable LoRA parameter is not on CUDA: {trainable_name} -> {trainable_parameter.device}")
+    non_cuda_batch = {name: str(value.device) for name, value in batch.items() if torch.is_tensor(value) and value.device.type != "cuda"}
+    if non_cuda_batch:
+        raise RuntimeError(f"Prepared training batch tensors are not on CUDA: {non_cuda_batch}")
+    device_index = accelerator.device.index if accelerator.device.index is not None else torch.cuda.current_device()
+    accelerator.print(
+        json.dumps(
+            {
+                "accelerator_device": str(accelerator.device),
+                "cuda_device_name": torch.cuda.get_device_name(device_index),
+                "lora_parameter": trainable_name,
+                "lora_parameter_device": str(trainable_parameter.device),
+                "batch_tensor_device": str(next(value.device for value in batch.values() if torch.is_tensor(value))),
+                "cuda_memory_allocated": torch.cuda.memory_allocated(device_index),
+                "cuda_memory_reserved": torch.cuda.memory_reserved(device_index),
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 def train(model_key: str) -> dict[str, Any]:
@@ -280,6 +455,7 @@ def train(model_key: str) -> dict[str, Any]:
     if core.config.tts_model_type != "base":
         raise RuntimeError("Selective adaptation requires an untouched Base checkpoint")
     freeze_base(core)
+    configure_subtalker_precision(core.talker)
 
     lora = LoraConfig(
         r=int(model_spec["lora_rank"]),
@@ -290,11 +466,20 @@ def train(model_key: str) -> dict[str, Any]:
     )
     if resume_checkpoint is None:
         adapter_model = get_peft_model(core, lora)
-        resume_state = {"micro_step": -1, "optimizer_step": 0}
+        resume_state = {
+            "training_semantics_version": TRAINING_SEMANTICS_VERSION,
+            "micro_step": -1,
+            "optimizer_step": 0,
+        }
     else:
-        adapter_model = PeftModel.from_pretrained(core, resume_checkpoint / "adapter", is_trainable=True)
         with (resume_checkpoint / "trainer_state.json").open("r", encoding="utf-8") as handle:
             resume_state = json.load(handle)
+        validate_resume_state(resume_state, resume_checkpoint)
+        adapter_model = PeftModel.from_pretrained(core, resume_checkpoint / "adapter", is_trainable=True)
+        ensure_finite_state_tensors(
+            [parameter for parameter in adapter_model.parameters() if parameter.requires_grad],
+            "LoRA checkpoint",
+        )
     if training["gradient_checkpointing"]:
         enable_talker_gradient_checkpointing(core)
     trainable_summary = validate_trainable_parameters(adapter_model)
@@ -303,8 +488,9 @@ def train(model_key: str) -> dict[str, Any]:
     manifest_dir = project_path("training_data/golos_balalaika/manifests")
     train_rows = list(iter_jsonl(manifest_dir / "train_with_codes.jsonl"))
     eval_rows = list(iter_jsonl(manifest_dir / "eval_with_codes.jsonl"))
-    if {row["id"] for row in train_rows} & {row["id"] for row in eval_rows}:
-        raise RuntimeError("Train/eval manifest overlap")
+    if not eval_rows:
+        raise RuntimeError("Evaluation manifest is empty; refusing to start training")
+    validate_train_eval_disjoint(train_rows, eval_rows)
     train_dataset = RussianAdaptationDataset(train_rows, wrapper.processor, core.config)
     eval_dataset = RussianAdaptationDataset(eval_rows, wrapper.processor, core.config)
     generator = torch.Generator().manual_seed(seed)
@@ -340,7 +526,9 @@ def train(model_key: str) -> dict[str, Any]:
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     if resume_checkpoint is not None:
-        optimizer.load_state_dict(torch.load(resume_checkpoint / "optimizer.pt", map_location="cpu", weights_only=True))
+        optimizer_state = torch.load(resume_checkpoint / "optimizer.pt", map_location="cpu", weights_only=True)
+        ensure_finite_state_tensors(optimizer_state, "optimizer checkpoint")
+        optimizer.load_state_dict(optimizer_state)
         for _ in range(int(resume_state["optimizer_step"])):
             scheduler.step()
 
@@ -351,9 +539,13 @@ def train(model_key: str) -> dict[str, Any]:
     model.train()
     optimizer_step = int(resume_state["optimizer_step"])
     start_micro_step = int(resume_state["micro_step"])
+    cuda_guard_complete = False
     for micro_step, batch in enumerate(train_loader):
         if micro_step <= start_micro_step:
             continue
+        if not cuda_guard_complete:
+            validate_cuda_training_state(accelerator, model, batch)
+            cuda_guard_complete = True
         with accelerator.accumulate(model):
             loss, first_loss, subtalker_loss = model(batch)
             accelerator.backward(loss)
@@ -378,7 +570,15 @@ def train(model_key: str) -> dict[str, Any]:
                     append_metric(metrics_path, metric)
                 accelerator.print(json.dumps(metric, ensure_ascii=False))
                 if optimizer_step % int(training["checkpoint_optimizer_steps"]) == 0:
-                    save_resume_checkpoint(accelerator, model, optimizer, resume_root, micro_step, optimizer_step)
+                    save_resume_checkpoint(
+                        accelerator,
+                        model,
+                        optimizer,
+                        resume_root,
+                        micro_step,
+                        optimizer_step,
+                        metric,
+                    )
 
     evaluation = evaluate(model, eval_loader, accelerator)
     if accelerator.is_main_process:

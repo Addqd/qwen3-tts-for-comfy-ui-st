@@ -230,6 +230,7 @@ def test_talker_input_grads_work_with_selective_lora() -> None:
     from qwen_tts.core.models.configuration_qwen3_tts import Qwen3TTSConfig
     from qwen_tts.core.models.modeling_qwen3_tts import Qwen3TTSForConditionalGeneration
     from training.russian_adaptation.train_lora import (
+        configure_subtalker_precision,
         enable_talker_gradient_checkpointing,
         freeze_base,
         validate_trainable_parameters,
@@ -243,6 +244,7 @@ def test_talker_input_grads_work_with_selective_lora() -> None:
     with init_empty_weights():
         core = Qwen3TTSForConditionalGeneration(config)
         freeze_base(core)
+        configure_subtalker_precision(core.talker)
         adapter = get_peft_model(
             core,
             LoraConfig(
