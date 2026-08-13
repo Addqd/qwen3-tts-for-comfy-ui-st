@@ -109,11 +109,20 @@ def test_non_wav_synthesis_removes_source_and_reports_returned_wav(monkeypatch, 
     assert json.loads(result[2])["format"] == "wav"
 
 
+def test_synthesis_failure_removes_all_provisional_audio(monkeypatch, tmp_path):
+    module = load_nodes()
+    node, server = _stub_synthesis(module, monkeypatch, tmp_path)
+    monkeypatch.setattr(module, "_json_request", lambda *_args, **_kwargs: (b"source-audio", {"X-Audio-Duration": "invalid"}))
+    with pytest.raises(ValueError):
+        node.synthesize(server, "text", "clone:test", 1.0, "mp3", "Full Russian")
+    assert not list(tmp_path.iterdir())
+
+
 def test_clone_rejects_incomplete_api_response(monkeypatch):
     module = load_nodes()
     monkeypatch.setattr(module, "_audio_to_wav_bytes", lambda _audio: b"wav")
     monkeypatch.setattr(module, "_json_request", lambda *_args, **_kwargs: ({"voice_id": "clone:test"}, {}))
-    with pytest.raises(RuntimeError, match="missing required field.*validation, metadata"):
+    with pytest.raises(RuntimeError, match=r"missing required field.*validation, metadata"):
         module.QwenTTSCloneVoiceNode().clone(
             {"endpoint": "http://127.0.0.1:8020", "timeout": 1}, {}, "text", "test", "Test", "Russian", False
         )

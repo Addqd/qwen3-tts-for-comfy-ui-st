@@ -169,6 +169,24 @@ def test_invalid_persisted_runtime_settings_fall_back_to_defaults(tmp_path):
     assert RuntimeSettingsStore(config).current()["top_p"] == 0.9
 
 
+def test_runtime_settings_current_isolates_nested_values(tmp_path):
+    config = load_config(ROOT / "config" / "config.example.yaml")
+    config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")
+    store = RuntimeSettingsStore(config)
+    exposed = store.current()
+    exposed["pronunciation_defaults"]["Qwen"] = "changed"
+    assert "Qwen" not in store.current()["pronunciation_defaults"]
+
+
+@pytest.mark.parametrize("field", ["temperature", "top_p", "repetition_penalty"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_runtime_settings_reject_non_finite_sampling_values(tmp_path, field, value):
+    config = load_config(ROOT / "config" / "config.example.yaml")
+    config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")
+    with pytest.raises(ValueError, match="must be finite"):
+        RuntimeSettingsStore(config).update({field: value})
+
+
 def test_runtime_settings_persistence_failure_keeps_memory_unchanged(tmp_path, monkeypatch):
     config = load_config(ROOT / "config" / "config.example.yaml")
     config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")

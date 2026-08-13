@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,8 @@ class RuntimeSettingsStore:
         result["top_k"] = int(result["top_k"])
         result["top_p"] = float(result["top_p"])
         result["repetition_penalty"] = float(result["repetition_penalty"])
+        if not all(math.isfinite(result[key]) for key in ("temperature", "top_p", "repetition_penalty")):
+            raise ValueError("qwentts sampling settings must be finite")
         if result["max_new_tokens"] <= 0 or result["top_k"] < 0:
             raise ValueError("Invalid qwentts integer sampling setting")
         if result["temperature"] < 0 or not 0 < result["top_p"] <= 1 or result["repetition_penalty"] <= 0:
@@ -54,7 +57,10 @@ class RuntimeSettingsStore:
         return result
 
     def current(self) -> dict[str, Any]:
-        return dict(self._settings)
+        return {
+            **self._settings,
+            "pronunciation_defaults": dict(self._settings["pronunciation_defaults"]),
+        }
 
     def update(self, changes: dict[str, Any]) -> dict[str, Any]:
         unknown = set(changes) - set(self.defaults)

@@ -289,23 +289,29 @@ class QwenTTSSynthesizeNode:
         body, headers = _json_request(server, "/v1/audio/speech", payload)
         unique_id = uuid.uuid4().hex
         response_path = _temp_dir() / f"qwen-tts-{unique_id}.{response_format}"
-        response_path.write_bytes(body)
-        audio = _load_comfy_audio(response_path)
         path = response_path
-        if response_format != "wav":
-            path = _temp_dir() / f"qwen-tts-{unique_id}.wav"
-            path.write_bytes(_audio_to_wav_bytes(audio))
-            response_path.unlink()
-        duration = float(headers.get("X-Audio-Duration", audio["waveform"].shape[-1] / audio["sample_rate"]))
-        metadata = json.dumps({
-            "model": "tts-1-ru",
-            "engine": headers.get("X-TTS-Engine", "qwentts.cpp"),
-            "voice": voice,
-            "format": path.suffix.removeprefix("."),
-            "duration": duration,
-            "node_version": VERSION,
-        }, ensure_ascii=False)
-        return _ui_result("qwen_tts_synthesis", (audio, str(path), metadata, duration), metadata)
+        try:
+            response_path.write_bytes(body)
+            audio = _load_comfy_audio(response_path)
+            if response_format != "wav":
+                path = _temp_dir() / f"qwen-tts-{unique_id}.wav"
+                path.write_bytes(_audio_to_wav_bytes(audio))
+                response_path.unlink()
+            duration = float(headers.get("X-Audio-Duration", audio["waveform"].shape[-1] / audio["sample_rate"]))
+            metadata = json.dumps({
+                "model": "tts-1-ru",
+                "engine": headers.get("X-TTS-Engine", "qwentts.cpp"),
+                "voice": voice,
+                "format": path.suffix.removeprefix("."),
+                "duration": duration,
+                "node_version": VERSION,
+            }, ensure_ascii=False)
+            return _ui_result("qwen_tts_synthesis", (audio, str(path), metadata, duration), metadata)
+        except Exception:
+            response_path.unlink(missing_ok=True)
+            if path != response_path:
+                path.unlink(missing_ok=True)
+            raise
 
 
 class QwenTTSVoiceSelectorNode:
