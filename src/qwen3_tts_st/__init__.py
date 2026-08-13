@@ -1,3 +1,3 @@
-"""Local Qwen3-TTS service."""
+"""Lightweight qwentts.cpp compatibility service."""
 
-__version__ = "0.3.0"
+__version__ = "1.0.0"

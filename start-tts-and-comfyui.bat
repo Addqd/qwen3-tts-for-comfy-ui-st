@@ -3,7 +3,7 @@ setlocal
 chcp 65001 >nul
 pushd "%~dp0"
 
-echo Starting Qwen3-TTS backend and ComfyUI...
+echo Starting qwentts.cpp backend and ComfyUI...
 echo A separate ComfyUI Python console will open if ComfyUI is not already running.
 echo Keep this launcher window open while you use the services.
 echo Close this window or the ComfyUI Python console to stop BOTH services.
@@ -21,6 +21,6 @@ if not "%START_EXIT_CODE%"=="0" (
 )
 
 echo.
-echo Launcher finished. Backend and ComfyUI have been stopped.
+echo Launcher finished. qwentts.cpp backend and ComfyUI have been stopped.
 popd
 endlocal

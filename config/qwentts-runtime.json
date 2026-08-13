@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "upstream": {
+    "repository": "https://github.com/ServeurpersoCom/qwentts.cpp",
+    "revision": "7b6ed4f6db964c14fd3ac36c1ca13f1ce6150f4e",
+    "prebuilt_base_url": "https://www.serveurperso.com/temp/qwentts.cpp-win64/build/Release/"
+  },
+  "models": {
+    "repository": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF",
+    "revision": "e0f336a048a3de02b29b8ad92969217d9ecffe3e",
+    "files": {
+      "qwen-talker-1.7b-base-Q8_0.gguf": "4b9a33a236908dd9435a42f7a396e38038329d053b704342a6413c08544c4fda",
+      "qwen-tokenizer-12hz-Q8_0.gguf": "1883beeed99348fc35e23dd225e9082f93f6f8c109330a33d935baa8acdbfd94"
+    }
+  },
+  "files": {
+    "ggml.dll": "6452579b66fa0051932b9be00dc82ba549097a2482461b4b484b9c06512eee7b",
+    "ggml-base.dll": "cc7a385ededd5c5b9dff6ddea43718dad7e014f9612cabe6ab4661a3bc6d5f82",
+    "ggml-cpu-haswell.dll": "469da6d8212a840995d2b90e3ae67c7e0c6cb91d599d653dfd5eedff15c85189",
+    "ggml-cuda.dll": "0e33172ceffb7b27bf59aca2e6f5f9477fcbfceb7a5be0392068564424b65d2e",
+    "qwen-codec.exe": "1e239ff1e5ccf922d12fe8f4f0bf95e7ab6d6846354a3613ba64c200e9b9bf85",
+    "qwen-tts.exe": "dc72de03d2779875bdd188d8de80fd4a66a7ff8dbe48290871b16439e1030d86",
+    "tts-server.exe": "313aa38235007709d47a520a1736bc482ff01fdeb00c3b660236193d39296aae",
+    "cublas64_13.dll": "5d083083cdd613577496791dd96d00fe3a78c955684b53ca46a8ffa3e0b1e170",
+    "cublasLt64_13.dll": "e1c26671801ecd435baf97c6e9cfe28196cf55005c2039356b48030b09ce5dd5"
+  },
+  "nvidia": {
+    "manifest_url": "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.0.0.json",
+    "archive_url": "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-13.0.0.19-archive.zip",
+    "archive_sha256": "c8fb12715b9639f51983315cc4b195e272128c675aa3766b13c4f470b892e6c8"
+  }
+}

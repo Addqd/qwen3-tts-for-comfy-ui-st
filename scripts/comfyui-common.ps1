@@ -1,9 +1,12 @@
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:ComfyUIStatePath = Join-Path $script:ProjectRoot "runtime\comfyui.json"
-$script:QwenTTSCloneCapabilityInputs = @(
-    "emotion_enabled", "sound_enabled", "sound_laugh", "sound_giggle",
-    "sound_gasp", "sound_sigh", "sound_pant", "sound_moan"
-)
+$script:QwenTTSRequiredSchemas = [ordered]@{
+    QwenTTSServer = @("endpoint", "timeout", "response_format")
+    QwenTTSRuntimeSettings = @("server", "apply_and_save", "language", "russian_normalization", "seed", "max_new_tokens", "temperature", "top_k", "top_p", "repetition_penalty")
+    QwenTTSCloneVoice = @("server", "reference_audio", "ref_text", "profile_name", "character_name", "language", "overwrite")
+    QwenTTSSynthesize = @("server", "text", "voice", "speed", "response_format", "russian_normalization")
+}
+$script:QwenTTSRemovedInputs = @("active_model", "generation_preset", "multilingual_mode", "chunking_mode", "style", "clone_mode")
 
 function Get-ComfyUISettings {
     param([string]$Config = "config/config.local.yaml")
@@ -61,23 +64,25 @@ function Assert-QwenTTSCloneVoiceSchema {
 
     if ($null -eq $Objects) {
         try {
-            $Objects = Invoke-RestMethod -Uri "$Url/object_info/QwenTTSCloneVoice" -TimeoutSec 15
+            $Objects = Invoke-RestMethod -Uri "$Url/object_info" -TimeoutSec 15
         } catch {
             throw "Unable to validate the running QwenTTSCloneVoice schema at $Url. ComfyUI must not be used until object_info is available."
         }
     }
-    $NodeProperty = $Objects.PSObject.Properties["QwenTTSCloneVoice"]
-    $Node = if ($NodeProperty) { $NodeProperty.Value } elseif ($Objects.input) { $Objects } else { $null }
-    if (-not $Node) {
-        throw "Running ComfyUI does not expose QwenTTSCloneVoice. Stop it with scripts/stop-comfyui.ps1, verify the managed node installation, and start it again."
+    foreach ($Entry in $script:QwenTTSRequiredSchemas.GetEnumerator()) {
+        $NodeProperty = $Objects.PSObject.Properties[$Entry.Key]
+        if (-not $NodeProperty) { throw "Running ComfyUI does not expose $($Entry.Key). Restart through the project launcher." }
+        $Required = $NodeProperty.Value.input.required
+        $Optional = $NodeProperty.Value.input.optional
+        $Available = @()
+        if ($Required) { $Available += @($Required.PSObject.Properties.Name) }
+        if ($Optional) { $Available += @($Optional.PSObject.Properties.Name) }
+        $Missing = @($Entry.Value | Where-Object { $Available -notcontains $_ })
+        if ($Missing.Count) { throw "Running ComfyUI has a stale $($Entry.Key) schema; missing: $($Missing -join ', ')." }
+        $Removed = @($script:QwenTTSRemovedInputs | Where-Object { $Available -contains $_ })
+        if ($Removed.Count) { throw "Running ComfyUI has obsolete $($Entry.Key) inputs: $($Removed -join ', ')." }
     }
-    $Required = $Node.input.required
-    $Available = if ($Required) { @($Required.PSObject.Properties.Name) } else { @() }
-    $Missing = @($script:QwenTTSCloneCapabilityInputs | Where-Object { $Available -notcontains $_ })
-    if ($Missing.Count) {
-        throw "Running ComfyUI has a stale QwenTTSCloneVoice schema; missing inputs: $($Missing -join ', '). Stop it with scripts/stop-comfyui.ps1, then start it again through the project launcher."
-    }
-    Write-Host "Qwen TTS ComfyUI runtime schema: current (QwenTTSCloneVoice)"
+    Write-Host "Qwen TTS ComfyUI runtime schema: current"
 }
 
 function Get-LocalhostTcpListenerProcess {

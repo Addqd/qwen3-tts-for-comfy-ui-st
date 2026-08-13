@@ -20,12 +20,19 @@ $WatchProcess = $null
 
 function Get-BackendOwnedProcess {
     param($State)
-    $Process = Get-Process -Id ([int]$State.pid) -ErrorAction SilentlyContinue
+    $Record = if ($State.facade) { $State.facade } else { $State }
+    return Get-BackendRecordProcess -Record $Record
+}
+
+function Get-BackendRecordProcess {
+    param($Record)
+    if (-not $Record) { return $null }
+    $Process = Get-Process -Id ([int]$Record.pid) -ErrorAction SilentlyContinue
     if (-not $Process) { return $null }
     try {
-        $ExpectedPath = [System.IO.Path]::GetFullPath((Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"))
+        $ExpectedPath = [System.IO.Path]::GetFullPath([string]$Record.executable)
         $ActualPath = [System.IO.Path]::GetFullPath([string]$Process.Path)
-        $ExpectedStart = [DateTime]::Parse([string]$State.start_time).ToUniversalTime()
+        $ExpectedStart = [DateTime]::Parse([string]$Record.start_time).ToUniversalTime()
         $StartMatches = [Math]::Abs(($Process.StartTime.ToUniversalTime() - $ExpectedStart).TotalSeconds) -le 2
         if ($StartMatches -and $ActualPath.Equals($ExpectedPath, [System.StringComparison]::OrdinalIgnoreCase)) { return $Process }
     } catch { }
@@ -73,7 +80,16 @@ function Quote-ProcessArgument {
 function Start-SessionWatcher {
     param($LauncherProcess, $BackendProcess, $ComfyProcess)
     $WatcherScript = Join-Path $PSScriptRoot "watch-tts-and-comfyui.ps1"
+    $BackendStatePath = Join-Path $script:ProjectRoot "runtime\server.json"
+    $BackendState = Get-Content -Raw -LiteralPath $BackendStatePath | ConvertFrom-Json
+    $EngineProcess = Get-BackendRecordProcess -Record $BackendState.engine
+    $RunnerProcess = Get-BackendRecordProcess -Record $BackendState.runner
+    if (-not $EngineProcess -or -not $RunnerProcess) {
+        throw "The qwentts.cpp engine or its runner could not be verified from the project PID file."
+    }
     $BackendExecutable = [System.IO.Path]::GetFullPath([string]$BackendProcess.Path)
+    $EngineExecutable = [System.IO.Path]::GetFullPath([string]$EngineProcess.Path)
+    $RunnerExecutable = [System.IO.Path]::GetFullPath([string]$RunnerProcess.Path)
     $ComfyExecutable = [System.IO.Path]::GetFullPath([string]$ComfyProcess.Path)
     $LauncherExecutable = [System.IO.Path]::GetFullPath([string]$LauncherProcess.Path)
     $Arguments = @(
@@ -84,6 +100,12 @@ function Start-SessionWatcher {
         "-BackendPid", [string]$BackendProcess.Id,
         "-BackendStartTicks", [string]$BackendProcess.StartTime.ToUniversalTime().Ticks,
         "-BackendExecutable", (Quote-ProcessArgument $BackendExecutable),
+        "-EnginePid", [string]$EngineProcess.Id,
+        "-EngineStartTicks", [string]$EngineProcess.StartTime.ToUniversalTime().Ticks,
+        "-EngineExecutable", (Quote-ProcessArgument $EngineExecutable),
+        "-RunnerPid", [string]$RunnerProcess.Id,
+        "-RunnerStartTicks", [string]$RunnerProcess.StartTime.ToUniversalTime().Ticks,
+        "-RunnerExecutable", (Quote-ProcessArgument $RunnerExecutable),
         "-ComfyPid", [string]$ComfyProcess.Id,
         "-ComfyStartTicks", [string]$ComfyProcess.StartTime.ToUniversalTime().Ticks,
         "-ComfyExecutable", (Quote-ProcessArgument $ComfyExecutable),
@@ -154,7 +176,7 @@ try {
         if ($WatchProcess.HasExited) { throw "The session watcher exited before it became ready." }
 
         Write-Host "Session watcher: PID $($WatchProcess.Id)"
-        Write-Host "Close this launcher window or the ComfyUI Python console to stop BOTH services."
+        Write-Host "Close this launcher window or the ComfyUI Python console to stop qwentts.cpp and ComfyUI."
         try {
             Wait-Process -Id $ComfyProcess.Id
         } finally {

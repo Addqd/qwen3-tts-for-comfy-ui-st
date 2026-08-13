@@ -6,6 +6,12 @@ param(
     [Parameter(Mandatory = $true)][int]$BackendPid,
     [Parameter(Mandatory = $true)][int64]$BackendStartTicks,
     [Parameter(Mandatory = $true)][string]$BackendExecutable,
+    [Parameter(Mandatory = $true)][int]$EnginePid,
+    [Parameter(Mandatory = $true)][int64]$EngineStartTicks,
+    [Parameter(Mandatory = $true)][string]$EngineExecutable,
+    [Parameter(Mandatory = $true)][int]$RunnerPid,
+    [Parameter(Mandatory = $true)][int64]$RunnerStartTicks,
+    [Parameter(Mandatory = $true)][string]$RunnerExecutable,
     [Parameter(Mandatory = $true)][int]$ComfyPid,
     [Parameter(Mandatory = $true)][int64]$ComfyStartTicks,
     [Parameter(Mandatory = $true)][string]$ComfyExecutable,
@@ -16,8 +22,6 @@ $ErrorActionPreference = "Stop"
 $Runtime = Join-Path $ProjectRoot "runtime"
 $LogPath = Join-Path $ProjectRoot "logs\combined-session-watch.log"
 $WatchStatePath = Join-Path $Runtime "combined-watch.json"
-$BackendStatePath = Join-Path $Runtime "server.json"
-$ComfyStatePath = Join-Path $Runtime "comfyui.json"
 
 function Write-WatchLog {
     param([string]$Message)
@@ -34,44 +38,10 @@ function Get-ExactProcess {
     try {
         $ExpectedPath = [System.IO.Path]::GetFullPath($Executable)
         $ActualPath = [System.IO.Path]::GetFullPath([string]$Process.Path)
-        if (
-            $Process.StartTime.ToUniversalTime().Ticks -eq $StartTicks -and
-            $ActualPath.Equals($ExpectedPath, [System.StringComparison]::OrdinalIgnoreCase)
-        ) { return $Process }
+        $StartMatches = [Math]::Abs($Process.StartTime.ToUniversalTime().Ticks - $StartTicks) -le [TimeSpan]::FromSeconds(2).Ticks
+        if ($StartMatches -and $ActualPath.Equals($ExpectedPath, [System.StringComparison]::OrdinalIgnoreCase)) { return $Process }
     } catch { }
     return $null
-}
-
-function Stop-ExactProcess {
-    param([string]$Name, [int]$ProcessId, [int64]$StartTicks, [string]$Executable)
-    $Process = Get-ExactProcess -ProcessId $ProcessId -StartTicks $StartTicks -Executable $Executable
-    if (-not $Process) { return $true }
-    try {
-        Stop-Process -Id $Process.Id
-        if (-not $Process.WaitForExit(15000)) { throw "$Name did not exit within 15 seconds." }
-        Write-WatchLog "$Name stopped (PID $ProcessId)."
-        return $true
-    } catch {
-        Write-WatchLog "Unable to stop $Name (PID $ProcessId): $($_.Exception.Message)"
-        return $false
-    }
-}
-
-function Remove-MatchingState {
-    param([string]$Path, [int]$ProcessId, [int64]$StartTicks, [string]$StartProperty)
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    try {
-        $State = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
-        if ([int]$State.pid -ne $ProcessId) { return }
-        $StateTicks = if ($StartProperty -eq "start_ticks") {
-            [int64]$State.start_ticks
-        } else {
-            [DateTime]::Parse([string]$State.start_time).ToUniversalTime().Ticks
-        }
-        if ([Math]::Abs($StateTicks - $StartTicks) -le [TimeSpan]::FromSeconds(2).Ticks) {
-            Remove-Item -LiteralPath $Path
-        }
-    } catch { }
 }
 
 try {
@@ -81,6 +51,8 @@ try {
         start_ticks = (Get-Process -Id $PID).StartTime.ToUniversalTime().Ticks
         launcher_pid = $LauncherPid
         backend_pid = $BackendPid
+        engine_pid = $EnginePid
+        runner_pid = $RunnerPid
         comfyui_pid = $ComfyPid
     } | ConvertTo-Json | Set-Content -LiteralPath $WatchStatePath -Encoding UTF8
     Write-WatchLog "Session watcher started (PID $PID)."
@@ -92,7 +64,15 @@ try {
             break
         }
         if (-not (Get-ExactProcess -ProcessId $BackendPid -StartTicks $BackendStartTicks -Executable $BackendExecutable)) {
-            $Reason = "backend closed"
+            $Reason = "compatibility facade closed"
+            break
+        }
+        if (-not (Get-ExactProcess -ProcessId $EnginePid -StartTicks $EngineStartTicks -Executable $EngineExecutable)) {
+            $Reason = "qwentts.cpp engine closed"
+            break
+        }
+        if (-not (Get-ExactProcess -ProcessId $RunnerPid -StartTicks $RunnerStartTicks -Executable $RunnerExecutable)) {
+            $Reason = "qwentts.cpp runner closed"
             break
         }
         if (-not (Get-ExactProcess -ProcessId $ComfyPid -StartTicks $ComfyStartTicks -Executable $ComfyExecutable)) {
@@ -103,10 +83,16 @@ try {
     }
 
     Write-WatchLog "Stopping the project session because $Reason."
-    $BackendStopped = Stop-ExactProcess -Name "backend" -ProcessId $BackendPid -StartTicks $BackendStartTicks -Executable $BackendExecutable
-    $ComfyStopped = Stop-ExactProcess -Name "ComfyUI" -ProcessId $ComfyPid -StartTicks $ComfyStartTicks -Executable $ComfyExecutable
-    if ($BackendStopped) { Remove-MatchingState -Path $BackendStatePath -ProcessId $BackendPid -StartTicks $BackendStartTicks -StartProperty "start_time" }
-    if ($ComfyStopped) { Remove-MatchingState -Path $ComfyStatePath -ProcessId $ComfyPid -StartTicks $ComfyStartTicks -StartProperty "start_ticks" }
+    try {
+        & (Join-Path $ProjectRoot "scripts\stop-comfyui.ps1")
+    } catch {
+        Write-WatchLog "ComfyUI cleanup failed: $($_.Exception.Message)"
+    }
+    try {
+        & (Join-Path $ProjectRoot "stop.ps1")
+    } catch {
+        Write-WatchLog "qwentts.cpp cleanup failed: $($_.Exception.Message)"
+    }
 } catch {
     Write-WatchLog "Watcher failure: $($_.Exception.Message)"
 } finally {

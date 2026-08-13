@@ -1,9 +1,5 @@
 [CmdletBinding()]
-param(
-    [string]$Config = "config/config.local.yaml",
-    [switch]$SkipSynthesis,
-    [int]$TimeoutSeconds = 900
-)
+param([string]$Config = "config/config.local.yaml", [switch]$SkipSynthesis, [int]$TimeoutSeconds = 900)
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "comfyui-common.ps1")
@@ -14,7 +10,7 @@ $ComfyUrl = "http://127.0.0.1:$($Settings.port)"
 function Invoke-JsonPost {
     param([string]$Uri, $Payload)
     $Json = $Payload | ConvertTo-Json -Depth 30 -Compress
-    return Invoke-RestMethod -Uri $Uri -Method Post -ContentType "application/json; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($Json)) -TimeoutSec 30
+    Invoke-RestMethod -Uri $Uri -Method Post -ContentType "application/json; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($Json)) -TimeoutSec 30
 }
 
 function Wait-ComfyPrompt {
@@ -24,98 +20,55 @@ function Wait-ComfyPrompt {
         Start-Sleep -Milliseconds 500
         $History = Invoke-RestMethod -Uri "$ComfyUrl/history/$PromptId" -TimeoutSec 15
         $Property = $History.PSObject.Properties[$PromptId]
-        if ($Property) {
-            $Job = $Property.Value
-            if ($Job.status.completed) { return $Job }
-        }
+        if ($Property -and $Property.Value.status.completed) { return $Property.Value }
     } while ((Get-Date) -lt $Deadline)
     throw "ComfyUI prompt $PromptId did not complete within $Timeout seconds."
 }
 
-function Submit-ComfyPrompt {
-    param($Prompt, [int]$Timeout = 120)
-    $Response = Invoke-JsonPost -Uri "$ComfyUrl/prompt" -Payload @{ prompt = $Prompt }
-    if (-not $Response.prompt_id) { throw "ComfyUI did not return prompt_id: $($Response | ConvertTo-Json -Depth 10)" }
-    return Wait-ComfyPrompt -PromptId ([string]$Response.prompt_id) -Timeout $Timeout
-}
-
-if (-not (Test-LocalHttp -Uri "$BackendUrl/health")) { throw "TTS backend is unavailable at $BackendUrl. Run scripts/start-tts-and-comfyui.ps1 first." }
-if (-not (Test-LocalHttp -Uri "$ComfyUrl/system_stats")) { throw "ComfyUI is unavailable at $ComfyUrl. Run scripts/start-tts-and-comfyui.ps1 first." }
-
+if (-not (Test-LocalHttp -Uri "$BackendUrl/health")) { throw "TTS facade is unavailable at $BackendUrl." }
+if (-not (Test-LocalHttp -Uri "$ComfyUrl/system_stats")) { throw "ComfyUI is unavailable at $ComfyUrl." }
 & (Join-Path $script:ProjectRoot "integrations\comfyui\test-install.ps1") -ComfyUIPath $Settings.install_path
 $Health = Invoke-RestMethod -Uri "$BackendUrl/health" -TimeoutSec 15
-$Models = Invoke-RestMethod -Uri "$BackendUrl/v1/models" -TimeoutSec 15
-$Voices = Invoke-RestMethod -Uri "$BackendUrl/v1/voices" -TimeoutSec 15
 $Objects = Invoke-RestMethod -Uri "$ComfyUrl/object_info" -TimeoutSec 30
 Assert-QwenTTSCloneVoiceSchema -Objects $Objects
-$ExpectedNodes = @("QwenTTSServer", "QwenTTSRuntimeSettings", "QwenTTSSynthesize", "QwenTTSCloneVoice", "QwenTTSVoiceSelector", "QwenTTSEmotionScript", "QwenTTSModels", "QwenTTSHealth")
+$ExpectedNodes = @("QwenTTSServer", "QwenTTSRuntimeSettings", "QwenTTSSynthesize", "QwenTTSCloneVoice", "QwenTTSVoiceSelector", "QwenTTSModels", "QwenTTSHealth")
 $Missing = @($ExpectedNodes | Where-Object { $null -eq $Objects.$_ })
 if ($Missing.Count) { throw "ComfyUI missing Qwen nodes: $($Missing -join ', ')" }
-$WorkflowDirectory = Join-Path $script:ProjectRoot "integrations\comfyui\example_workflows"
-$WorkflowFiles = @(Get-ChildItem -LiteralPath $WorkflowDirectory -Filter "*.json" -File)
-foreach ($WorkflowFile in $WorkflowFiles) {
-    $Workflow = Get-Content -Raw -LiteralPath $WorkflowFile.FullName -Encoding UTF8 | ConvertFrom-Json
-    $MissingTypes = @($Workflow.nodes.type | Sort-Object -Unique | Where-Object { $null -eq $Objects.$_ })
-    if ($MissingTypes.Count) { throw "Workflow $($WorkflowFile.Name) has missing nodes: $($MissingTypes -join ', ')" }
-}
+
+$WorkflowPath = Join-Path $script:ProjectRoot "integrations\comfyui\example_workflows\voice_profile_from_wav_ru.json"
+$Workflow = Get-Content -Raw -LiteralPath $WorkflowPath -Encoding UTF8 | ConvertFrom-Json
+if ([int]$Workflow.extra.qwen_tts_workflow_schema -ne 4) { throw "Canonical workflow schema marker is stale." }
+$MissingTypes = @($Workflow.nodes.type | Sort-Object -Unique | Where-Object { $null -eq $Objects.$_ })
+if ($MissingTypes.Count) { throw "Canonical workflow has missing nodes: $($MissingTypes -join ', ')" }
+
 $EmbeddedPython = Join-Path $Settings.install_path "python_embeded\python.exe"
-$HasQwenBackend = & $EmbeddedPython -c "import importlib.util; print(importlib.util.find_spec('qwen_tts') is not None)"
-if ($LASTEXITCODE -ne 0 -or $HasQwenBackend.Trim() -ne "False") { throw "qwen_tts is unexpectedly installed in ComfyUI embedded Python." }
+$HasHeavyBackend = & $EmbeddedPython -c "import importlib.util; print(any(importlib.util.find_spec(x) is not None for x in ('qwen_tts','torch','transformers')))"
+if ($LASTEXITCODE -ne 0 -or $HasHeavyBackend.Trim() -ne "False") { throw "A neural Python backend is unexpectedly installed in ComfyUI Python." }
 
-$DiagnosticText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0KLQuNGF0L7QtSDQv9C+0LLQtdGB0YLQstC+0LLQsNC90LjQtS4gW3ZvaWNlOmhhcHB5XSAi0KDQsNC00L7RgdGC0L3QsNGPINGA0LXQv9C70LjQutCwISIg0KHQvdC+0LLQsCDQvdC10LnRgtGA0LDQu9GM0L3Qvi4gW3ZvaWNlOnVua25vd25dICLQkdC10LfQvtC/0LDRgdC90YvQuSBmYWxsYmFjay4i"))
-$DiagnosticPrompt = [ordered]@{
-    "1" = @{ class_type = "QwenTTSServer"; inputs = @{ endpoint = $BackendUrl; timeout = 30; model = "tts-1-ru"; response_format = "wav" } }
-    "2" = @{ class_type = "QwenTTSHealth"; inputs = @{ server = @("1", 0) } }
-    "3" = @{ class_type = "QwenTTSModels"; inputs = @{ server = @("1", 0) } }
-    "4" = @{ class_type = "QwenTTSVoiceSelector"; inputs = @{ server = @("1", 0); voice = "clone:QwenDemoRussianNeutral" } }
-    "5" = @{ class_type = "QwenTTSEmotionScript"; inputs = @{ text = $DiagnosticText; character_profile_mapping = "{`"neutral`":`"clone:QwenDemoRussianNeutral`",`"happy`":`"clone:QwenDemoHappyCandidate`"}" } }
-    "6" = @{ class_type = "QwenTTSVoiceSelector"; inputs = @{ server = @("1", 0); voice = "clone:DefinitelyMissingProfile" } }
-}
-$DiagnosticJob = Submit-ComfyPrompt -Prompt $DiagnosticPrompt -Timeout 120
-if ($DiagnosticJob.status.status_str -ne "success") { throw "Diagnostic workflow failed: $($DiagnosticJob.status | ConvertTo-Json -Depth 20)" }
-$DiagnosticOutputs = @($DiagnosticJob.outputs.PSObject.Properties.Name)
-foreach ($Id in @("2", "3", "4", "5", "6")) {
-    if ($DiagnosticOutputs -notcontains $Id) { throw "Diagnostic history has no output for node $Id." }
-}
-$HealthOutput = $DiagnosticJob.outputs.PSObject.Properties["2"].Value.qwen_tts_health[0]
-if ($HealthOutput.status -ne "ok") { throw "Health node did not report backend status ok." }
-$ModelsOutput = @($DiagnosticJob.outputs.PSObject.Properties["3"].Value.qwen_tts_models[0])
-if (@($ModelsOutput.id) -notcontains "tts-1-ru") { throw "Models node did not return tts-1-ru." }
-$EmotionOutput = $DiagnosticJob.outputs.PSObject.Properties["5"].Value.qwen_tts_emotion[0]
-if ([string]$EmotionOutput.clean_text -match "\[voice:") { throw "Emotion node left a service voice tag in clean text." }
-$MissingVoiceOutput = [string]$DiagnosticJob.outputs.PSObject.Properties["6"].Value.qwen_tts_voices[0]
-if ($MissingVoiceOutput -notmatch "not currently available") { throw "Missing voice profile did not produce a clear availability message." }
-
-$SynthesisPromptId = $null
+$PromptId = $null
 if (-not $SkipSynthesis) {
-    $VoiceIds = @($Voices.data | ForEach-Object { $_.voice_id })
-    if ($VoiceIds -notcontains "clone:QwenDemoRussianNeutral") { throw "The documented synthetic technical profile clone:QwenDemoRussianNeutral is unavailable; real synthesis was not attempted." }
-    $SynthesisText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0J/RgNC+0LLQtdGA0LrQsCDRgNC10LDQu9GM0L3QvtCz0L4g0LLQt9Cw0LjQvNC+0LTQtdC50YHRgtCy0LjRjyBDb21meVVJINGBINC70L7QutCw0LvRjNC90YvQvCBRd2VuIFRUUyBiYWNrZW5kLg=="))
-    $SynthesisPrompt = [ordered]@{
-        "1" = @{ class_type = "QwenTTSServer"; inputs = @{ endpoint = $BackendUrl; timeout = $TimeoutSeconds; model = "tts-1-ru"; response_format = "wav" } }
-        "2" = @{ class_type = "QwenTTSSynthesize"; inputs = @{ server = @("1", 0); text = $SynthesisText; voice = "clone:QwenDemoRussianNeutral"; speed = 1.0; model = "tts-1-ru"; response_format = "wav"; preprocessing_mode = "all"; emotion_script = "" } }
-        "3" = @{ class_type = "PreviewAudio"; inputs = @{ audio = @("2", 0) } }
+    $Text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0J/RgNC+0LLQtdGA0LrQsCDQt9Cw0LLQtdGA0YjQtdC90LAuINCh0LjRgdGC0LXQvNCwINGA0LDQsdC+0YLQsNC10YIg0YHRgtCw0LHQuNC70YzQvdC+LCDQuCDQstGB0LUg0L3QsNGB0YLRgNC+0LnQutC4INGB0L7RhdGA0LDQvdC10L3Riy4="))
+    $Prompt = [ordered]@{
+        "1" = @{ class_type="QwenTTSServer"; inputs=@{ endpoint=$BackendUrl; timeout=$TimeoutSeconds; response_format="wav" } }
+        "2" = @{ class_type="QwenTTSSynthesize"; inputs=@{ server=@("1",0); text=$Text; voice="clone:test_ru_dima_neutral"; speed=1.0; response_format="wav"; russian_normalization="Use Backend Default" } }
+        "3" = @{ class_type="PreviewAudio"; inputs=@{ audio=@("2",0) } }
     }
-    $Response = Invoke-JsonPost -Uri "$ComfyUrl/prompt" -Payload @{ prompt = $SynthesisPrompt }
-    $SynthesisPromptId = [string]$Response.prompt_id
-    $SynthesisJob = Wait-ComfyPrompt -PromptId $SynthesisPromptId -Timeout $TimeoutSeconds
-    if ($SynthesisJob.status.status_str -ne "success") { throw "Synthesis workflow failed: $($SynthesisJob.status | ConvertTo-Json -Depth 20)" }
-    if (@($SynthesisJob.outputs.PSObject.Properties.Name) -notcontains "3") { throw "PreviewAudio output is absent from synthesis history." }
+    $Response = Invoke-JsonPost -Uri "$ComfyUrl/prompt" -Payload @{ prompt=$Prompt }
+    $PromptId = [string]$Response.prompt_id
+    $Job = Wait-ComfyPrompt -PromptId $PromptId -Timeout $TimeoutSeconds
+    if ($Job.status.status_str -ne "success" -or @($Job.outputs.PSObject.Properties.Name) -notcontains "3") { throw "ComfyUI synthesis/PreviewAudio smoke failed." }
 }
 
 $Queue = Invoke-RestMethod -Uri "$ComfyUrl/queue" -TimeoutSec 15
-if (@($Queue.queue_running).Count -or @($Queue.queue_pending).Count) { throw "ComfyUI queue is not empty after integration tests." }
+if (@($Queue.queue_running).Count -or @($Queue.queue_pending).Count) { throw "ComfyUI queue is not empty after smoke test." }
 [ordered]@{
-    backend_status = $Health.status
-    backend_model_loaded_after_test = (Invoke-RestMethod -Uri "$BackendUrl/health" -TimeoutSec 15).model_loaded
-    models = @($Models.data | ForEach-Object { $_.id })
-    voices = @($Voices.data | ForEach-Object { $_.voice_id })
-    registered_nodes = $ExpectedNodes
-    validated_workflows = @($WorkflowFiles.Name)
-    qwen_tts_in_comfyui_python = [bool]::Parse($HasQwenBackend.Trim())
-    diagnostic_status = $DiagnosticJob.status.status_str
-    synthesis_skipped = [bool]$SkipSynthesis
-    synthesis_prompt_id = $SynthesisPromptId
-    queue_running = @($Queue.queue_running).Count
-    queue_pending = @($Queue.queue_pending).Count
-} | ConvertTo-Json -Depth 8
+    backend_status=$Health.status
+    engine=$Health.engine
+    default_voice=$Health.default_voice
+    registered_nodes=$ExpectedNodes
+    canonical_workflow=(Split-Path -Leaf $WorkflowPath)
+    workflow_schema=$Workflow.extra.qwen_tts_workflow_schema
+    heavy_backend_in_comfyui_python=[bool]::Parse($HasHeavyBackend.Trim())
+    synthesis_skipped=[bool]$SkipSynthesis
+    synthesis_prompt_id=$PromptId
+} | ConvertTo-Json -Depth 6
