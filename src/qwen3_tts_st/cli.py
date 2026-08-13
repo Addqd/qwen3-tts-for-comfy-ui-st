@@ -11,17 +11,17 @@ from .config import load_config
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Local Qwen3-TTS OpenAI-compatible backend")
+    parser = argparse.ArgumentParser(description="Local qwentts.cpp compatibility service")
     parser.add_argument("--config", default=None)
     args = parser.parse_args()
     config = load_config(args.config)
-    log_dir = Path(__file__).resolve().parents[2] / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    sys.stdout = (log_dir / "server.out.log").open("a", encoding="utf-8", buffering=1)
-    sys.stderr = (log_dir / "server.err.log").open("a", encoding="utf-8", buffering=1)
+    logs = Path(__file__).resolve().parents[2] / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    sys.stdout = (logs / "facade.out.log").open("a", encoding="utf-8", buffering=1)
+    sys.stderr = (logs / "facade.err.log").open("a", encoding="utf-8", buffering=1)
     uvicorn.run(
         create_app(config=config),
-        host=str(config.get("server.host", "127.0.0.1")),
+        host="127.0.0.1",
         port=int(config.get("server.port", 8020)),
         workers=1,
         log_level=str(config.get("logging.level", "info")).lower(),

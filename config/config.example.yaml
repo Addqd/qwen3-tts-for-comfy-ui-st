@@ -2,180 +2,41 @@ server:
   host: 127.0.0.1
   port: 8020
 
-model:
-  backend: qwen
-  # Legacy single-model keys are retained for older local overrides.
-  id: Qwen/Qwen3-TTS-12Hz-0.6B-Base
-  cache_dir: model_cache
-  # Turing validation: float16 stalled; float32 completed repeatedly.
-  dtype: float32
-  attention: sdpa
-  max_new_tokens: 2048
-
-models:
-  default: qwen3-tts-0.6b
-  cache_dir: model_cache
-  available:
-    qwen3-tts-0.6b:
-      hf_id: Qwen/Qwen3-TTS-12Hz-0.6B-Base
-      aliases: [tts-1-ru-fast]
-      runtime:
-        mode: inherit
-        dtype: float32
-        attention: sdpa
-        max_new_tokens: 2048
-        minimum_free_vram_mb: 6000
-        safety_reserve_mb: 750
-        reject_shared_memory_pressure: true
-    qwen3-tts-1.7b:
-      hf_id: Qwen/Qwen3-TTS-12Hz-1.7B-Base
-      aliases: [tts-1-ru-quality]
-      runtime:
-        mode: inherit
-        dtype: float32
-        attention: sdpa
-        max_new_tokens: 2048
-        # Deliberately conservative for an 8 GB Turing GPU: auto normally
-        # selects CPU for 1.7B instead of risking an opaque CUDA OOM.
-        minimum_free_vram_mb: 7600
-        safety_reserve_mb: 750
-        reject_shared_memory_pressure: true
-    qwen3-tts-0.6b-russian-tuned:
-      local_path: trained_models/qwen3-tts-0.6b-russian-tuned/checkpoint-epoch-1
-      aliases: [tts-1-ru-fast-tuned]
-      runtime:
-        mode: inherit
-        dtype: float32
-        attention: sdpa
-        max_new_tokens: 2048
-        minimum_free_vram_mb: 6000
-        safety_reserve_mb: 750
-        reject_shared_memory_pressure: true
-    qwen3-tts-1.7b-russian-tuned:
-      local_path: trained_models/qwen3-tts-1.7b-russian-tuned/checkpoint-epoch-1
-      aliases: [tts-1-ru-quality-tuned]
-      runtime:
-        mode: inherit
-        dtype: float32
-        attention: sdpa
-        max_new_tokens: 2048
-        minimum_free_vram_mb: 7600
-        safety_reserve_mb: 750
-        reject_shared_memory_pressure: true
-
-generation:
-  presets:
-    default: {}
-    stable_russian:
-      do_sample: true
-      temperature: 0.75
-      top_k: 40
-      top_p: 0.90
-      repetition_penalty: 1.05
-      subtalker_dosample: true
-      subtalker_temperature: 0.75
-      subtalker_top_k: 40
-      subtalker_top_p: 0.90
-
-request_defaults:
-  # OpenAI-compatible clients that cannot send the optional custom fields
-  # (including SillyTavern) receive the stable Russian path. Explicit request
-  # values such as ComfyUI's Default/Off controls always take precedence.
-  generation_preset: stable_russian
-  russian_normalization: full
-
-runtime_defaults:
-  # Saved local values in runtime/tts-settings.json override these defaults.
-  # Explicit request fields still have the highest precedence.
-  active_model: tts-1-ru
-  multilingual_mode: auto
-  chunking_mode: semantic
-  leading_silence_ms: 100
-  trailing_silence_ms: 150
-
-normalization:
-  # Only explicit lexical replacements are made; there is no unsafe blanket
-  # replacement of every Russian letter e with yo.
-  yo_dictionary:
-    "еще": "ещё"
-    "ее": "её"
-    "елка": "ёлка"
-    "ежик": "ёжик"
-
-pronunciation:
-  # Global deterministic replacements. Request overrides win on key clashes.
-  dictionary: {}
-
-resources:
-  mode: auto
-  gpu:
-    enabled: true
-    device: 0
-    minimum_free_vram_mb: 6000
-    safety_reserve_mb: 750
-    reject_shared_memory_pressure: true
-  cpu:
-    enabled: true
-    max_threads: auto
-    reserve_threads: 2
-  ram:
-    safety_reserve_mb: 4096
-  external_ai:
-    monitor_only: true
-    process_names: []
-    gpu_reserve_mb: 0
-    cpu_reserve_threads: 0
-    ram_reserve_mb: 0
+qwentts:
+  host: 127.0.0.1
+  port: 8030
+  executable: runtime/qwentts/bin/tts-server.exe
+  codec_executable: runtime/qwentts/bin/qwen-codec.exe
+  active_model: bf16
+  models:
+    bf16:
+      talker_model: runtime/qwentts/models/qwen-talker-1.7b-base-BF16.gguf
+      codec_model: runtime/qwentts/models/qwen-tokenizer-12hz-BF16.gguf
+    q8:
+      talker_model: runtime/qwentts/models/qwen-talker-1.7b-base-Q8_0.gguf
+      codec_model: runtime/qwentts/models/qwen-tokenizer-12hz-Q8_0.gguf
+  model_id: tts-1-ru
+  language: Russian
+  backend: CUDA0
+  max_batch: 1
+  request_timeout_seconds: 900
+  queue_timeout_seconds: 30
 
 voices:
   library_dir: voice_library
-  fallback_profile: clone:QwenDemoRussianNeutral
+  default_voice: clone:test_ru_dima_neutral
 
-queue:
-  max_concurrent: 1
-  max_waiting: 4
-  wait_timeout_seconds: 30
-  generation_timeout_seconds: 900
-
-chunking:
-  enabled: true
-  max_chars: 320
-
-pauses:
-  # Reserved legacy keys. Internal chunks/spans are joined without fixed silence.
-  sentence_ms: 80
-  paragraph_ms: 220
-  segment_ms: 120
-  # Small overlap join and outer speech-edge fade; neither inserts zero gaps.
-  crossfade_ms: 8
-  edge_fade_ms: 5
-
-performance:
-  sound_carriers:
-    laugh: "Ха-ха-ха..."
-    giggle: "Хи-хи..."
-    gasp: "Ах!"
-    sigh: "А-а..."
-    pant: "Ха... ха..."
-    moan: "М-м-м..."
-  boundaries:
-    edge_window_ms: 40
-    edge_silence_threshold: 0.0025
-    edge_min_silence_ms: 12
-    edge_safety_ms: 4
-    dc_offset_threshold: 0.01
-    level_window_ms: 20
-    level_rms_floor: 0.003
-    max_gain_correction_db: 2.5
-    crossfade_ms:
-      same_profile_speech: 15
-      different_emotion_speech: 45
-      speech_to_sound: 30
-      sound_to_speech: 30
-      sound_to_sound: 30
+runtime_defaults:
+  russian_normalization: full
+  pronunciation_defaults: {}
+  seed: -1
+  max_new_tokens: 4096
+  temperature: 0.75
+  top_k: 40
+  top_p: 0.90
+  repetition_penalty: 1.05
 
 preprocessing:
-  mode: all
   remove_markdown: true
   remove_html: true
   remove_chatml: true
@@ -190,7 +51,6 @@ preprocessing:
 logging:
   level: INFO
   access_log: false
-  log_full_text: false
 
 runtime:
   dir: runtime
@@ -209,8 +69,6 @@ integrations:
   sillytavern:
     model: tts-1-ru
     response_format: mp3
-    recommended_generation_preset: stable_russian
-    recommended_russian_normalization: full
   comfyui:
     endpoint: http://127.0.0.1:8020
     timeout_seconds: 900

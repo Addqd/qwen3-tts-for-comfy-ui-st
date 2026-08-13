@@ -1,9 +1,12 @@
 $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:ComfyUIStatePath = Join-Path $script:ProjectRoot "runtime\comfyui.json"
-$script:QwenTTSCloneCapabilityInputs = @(
-    "emotion_enabled", "sound_enabled", "sound_laugh", "sound_giggle",
-    "sound_gasp", "sound_sigh", "sound_pant", "sound_moan"
-)
+$script:QwenTTSRequiredSchemas = [ordered]@{
+    QwenTTSServer = @("endpoint", "timeout", "response_format")
+    QwenTTSRuntimeSettings = @("server", "apply_and_save", "language", "russian_normalization", "seed", "max_new_tokens", "temperature", "top_k", "top_p", "repetition_penalty")
+    QwenTTSCloneVoice = @("server", "reference_audio", "ref_text", "profile_name", "character_name", "language", "overwrite")
+    QwenTTSSynthesize = @("server", "text", "voice", "speed", "response_format", "russian_normalization")
+}
+$script:QwenTTSRemovedInputs = @("active_model", "generation_preset", "multilingual_mode", "chunking_mode", "style", "clone_mode")
 
 function Get-ComfyUISettings {
     param([string]$Config = "config/config.local.yaml")
@@ -56,28 +59,66 @@ function Test-LocalPortInUse {
     return [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners().Port -contains $Port
 }
 
+function Sync-QwenTTSManagedWorkflow {
+    param($Settings)
+
+    $Source = (Resolve-Path -LiteralPath (Join-Path $script:ProjectRoot "integrations\comfyui\example_workflows\voice_profile_from_wav_ru.json")).Path
+    $ComfyRoot = (Resolve-Path -LiteralPath ([string]$Settings.install_path)).Path
+    $WorkflowRoot = Join-Path $ComfyRoot "ComfyUI\user\default\workflows"
+    $Target = Join-Path $WorkflowRoot "voice_profile_from_wav_ru.json"
+    $Marker = Join-Path $WorkflowRoot ".qwen_tts_voice_profile_workflow.json"
+
+    if (-not (Test-Path -LiteralPath $Marker)) {
+        if (Test-Path -LiteralPath $Target) {
+            Write-Warning "An unmarked user workflow exists at $Target and was not overwritten. Open the canonical repository JSON directly."
+        } else {
+            Write-Host "Canonical Qwen TTS workflow is opened directly from: $Source"
+        }
+        return $false
+    }
+
+    try { $Info = Get-Content -Raw -LiteralPath $Marker -Encoding UTF8 | ConvertFrom-Json } catch {
+        throw "Managed workflow marker is unreadable; no workflow was changed."
+    }
+    $ExpectedTarget = [IO.Path]::GetFullPath($Target)
+    if ([string]::IsNullOrWhiteSpace([string]$Info.target)) {
+        throw "Managed workflow marker failed its safety checks; no workflow was changed."
+    }
+    $MarkedTarget = [IO.Path]::GetFullPath([string]$Info.target)
+    if ([string]$Info.workflow -ne "voice_profile_from_wav_ru.json" -or
+        -not $MarkedTarget.Equals($ExpectedTarget, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Managed workflow marker failed its safety checks; no workflow was changed."
+    }
+    New-Item -ItemType Directory -Force -Path $WorkflowRoot | Out-Null
+    Copy-Item -LiteralPath $Source -Destination $Target -Force
+    Write-Host "Managed canonical Qwen TTS workflow synchronized: $Target"
+    return $true
+}
+
 function Assert-QwenTTSCloneVoiceSchema {
     param([string]$Url = "", $Objects = $null)
 
     if ($null -eq $Objects) {
         try {
-            $Objects = Invoke-RestMethod -Uri "$Url/object_info/QwenTTSCloneVoice" -TimeoutSec 15
+            $Objects = Invoke-RestMethod -Uri "$Url/object_info" -TimeoutSec 15
         } catch {
             throw "Unable to validate the running QwenTTSCloneVoice schema at $Url. ComfyUI must not be used until object_info is available."
         }
     }
-    $NodeProperty = $Objects.PSObject.Properties["QwenTTSCloneVoice"]
-    $Node = if ($NodeProperty) { $NodeProperty.Value } elseif ($Objects.input) { $Objects } else { $null }
-    if (-not $Node) {
-        throw "Running ComfyUI does not expose QwenTTSCloneVoice. Stop it with scripts/stop-comfyui.ps1, verify the managed node installation, and start it again."
+    foreach ($Entry in $script:QwenTTSRequiredSchemas.GetEnumerator()) {
+        $NodeProperty = $Objects.PSObject.Properties[$Entry.Key]
+        if (-not $NodeProperty) { throw "Running ComfyUI does not expose $($Entry.Key). Restart through the project launcher." }
+        $Required = $NodeProperty.Value.input.required
+        $Optional = $NodeProperty.Value.input.optional
+        $Available = @()
+        if ($Required) { $Available += @($Required.PSObject.Properties.Name) }
+        if ($Optional) { $Available += @($Optional.PSObject.Properties.Name) }
+        $Missing = @($Entry.Value | Where-Object { $Available -notcontains $_ })
+        if ($Missing.Count) { throw "Running ComfyUI has a stale $($Entry.Key) schema; missing: $($Missing -join ', ')." }
+        $Removed = @($script:QwenTTSRemovedInputs | Where-Object { $Available -contains $_ })
+        if ($Removed.Count) { throw "Running ComfyUI has obsolete $($Entry.Key) inputs: $($Removed -join ', ')." }
     }
-    $Required = $Node.input.required
-    $Available = if ($Required) { @($Required.PSObject.Properties.Name) } else { @() }
-    $Missing = @($script:QwenTTSCloneCapabilityInputs | Where-Object { $Available -notcontains $_ })
-    if ($Missing.Count) {
-        throw "Running ComfyUI has a stale QwenTTSCloneVoice schema; missing inputs: $($Missing -join ', '). Stop it with scripts/stop-comfyui.ps1, then start it again through the project launcher."
-    }
-    Write-Host "Qwen TTS ComfyUI runtime schema: current (QwenTTSCloneVoice)"
+    Write-Host "Qwen TTS ComfyUI runtime schema: current"
 }
 
 function Get-LocalhostTcpListenerProcess {

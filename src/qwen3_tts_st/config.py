@@ -20,43 +20,14 @@ def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _apply_legacy_model_overrides(data: dict[str, Any], override: dict[str, Any]) -> None:
-    """Map explicitly supplied single-model keys into the default registry entry."""
-
-    legacy = override.get("model")
-    if not isinstance(legacy, dict):
-        return
-    models = data.get("models")
-    if not isinstance(models, dict):
-        return
-    default_key = str(models.get("default", ""))
-    available = models.get("available")
-    if not default_key or not isinstance(available, dict) or not isinstance(available.get(default_key), dict):
-        return
-
-    modern = override.get("models") if isinstance(override.get("models"), dict) else {}
-    modern_available = modern.get("available") if isinstance(modern.get("available"), dict) else {}
-    modern_spec = modern_available.get(default_key) if isinstance(modern_available.get(default_key), dict) else {}
-    modern_runtime = modern_spec.get("runtime") if isinstance(modern_spec.get("runtime"), dict) else {}
-    spec = available[default_key]
-    runtime = spec.setdefault("runtime", {})
-
-    if "id" in legacy and "hf_id" not in modern_spec:
-        spec["hf_id"] = legacy["id"]
-    for key in ("dtype", "attention", "max_new_tokens"):
-        if key in legacy and key not in modern_runtime:
-            runtime[key] = legacy[key]
-    if "cache_dir" in legacy and "cache_dir" not in modern:
-        models["cache_dir"] = legacy["cache_dir"]
-
-
 class AppConfig:
     def __init__(self, data: dict[str, Any], source: Path):
         self.data = data
         self.source = source
-        host = str(self.get("server.host", "127.0.0.1"))
-        if host != "127.0.0.1":
-            raise ValueError("Безопасность: server.host должен быть строго 127.0.0.1")
+        for key in ("server.host", "qwentts.host", "comfyui.host"):
+            if str(self.get(key, "127.0.0.1")) != "127.0.0.1":
+                raise ValueError(f"Security: {key} must be exactly 127.0.0.1")
+        self.qwentts_model()
 
     def get(self, dotted: str, default: Any = None) -> Any:
         current: Any = self.data
@@ -70,15 +41,46 @@ class AppConfig:
         value = Path(str(self.get(dotted, default)))
         return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
 
+    def qwentts_model(self) -> tuple[str, Path, Path]:
+        variant = str(self.get("qwentts.active_model", "bf16")).strip().lower()
+        if variant not in {"bf16", "q8"}:
+            raise ValueError(f"Unknown qwentts.active_model: {variant}. Supported values: bf16, q8")
+        prefix = f"qwentts.models.{variant}"
+        talker = self.get(f"{prefix}.talker_model")
+        codec = self.get(f"{prefix}.codec_model")
+        if not talker or not codec:
+            raise ValueError(f"qwentts model registry entry is incomplete: {variant}")
+        return variant, self.path(f"{prefix}.talker_model", ""), self.path(f"{prefix}.codec_model", "")
+
+    def configured_qwentts_variant(self) -> str:
+        override: dict[str, Any] = {}
+        if self.source.exists():
+            override = yaml.safe_load(self.source.read_text(encoding="utf-8")) or {}
+        variant = str(override.get("qwentts", {}).get("active_model", self.qwentts_model()[0])).strip().lower()
+        if variant not in {"bf16", "q8"}:
+            raise ValueError(f"Unknown qwentts.active_model: {variant}. Supported values: bf16, q8")
+        return variant
+
+    def persist_qwentts_variant(self, variant: str) -> str:
+        selected = variant.strip().lower()
+        if selected not in {"bf16", "q8"}:
+            raise ValueError(f"Unknown qwentts.active_model: {selected}. Supported values: bf16, q8")
+        override: dict[str, Any] = {}
+        if self.source.exists():
+            override = yaml.safe_load(self.source.read_text(encoding="utf-8")) or {}
+        override.setdefault("qwentts", {})["active_model"] = selected
+        self.source.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(f"{self.source}.tmp")
+        temporary.write_text(yaml.safe_dump(override, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        temporary.replace(self.source)
+        return selected
+
 
 def load_config(path: str | Path | None = None) -> AppConfig:
     example = PROJECT_ROOT / "config" / "config.example.yaml"
     selected = Path(path).resolve() if path else PROJECT_ROOT / "config" / "config.local.yaml"
-    with example.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle) or {}
+    data = yaml.safe_load(example.read_text(encoding="utf-8")) or {}
     if selected.exists() and selected != example:
-        with selected.open("r", encoding="utf-8") as handle:
-            override = yaml.safe_load(handle) or {}
+        override = yaml.safe_load(selected.read_text(encoding="utf-8")) or {}
         data = _merge(data, override)
-        _apply_legacy_model_overrides(data, override)
-    return AppConfig(data, selected if selected.exists() else example)
+    return AppConfig(data, selected)

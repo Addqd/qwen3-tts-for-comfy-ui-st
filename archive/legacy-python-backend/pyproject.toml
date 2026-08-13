@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwen3-tts-st"
+version = "0.3.0"
+description = "Local Qwen3-TTS backend for SillyTavern, ComfyUI and OpenAI-compatible clients"
+readme = "README_RU.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "qwen-tts==0.1.1",
+  "transformers==4.57.3",
+  "accelerate==1.12.0",
+  "torch==2.11.0",
+  "torchaudio==2.11.0",
+  "fastapi==0.116.1",
+  "uvicorn[standard]==0.35.0",
+  "pydantic==2.11.7",
+  "PyYAML==6.0.2",
+  "numpy==2.2.6",
+  "scipy==1.16.1",
+  "soundfile==0.13.1",
+  "psutil==7.0.0",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest==8.4.1", "pytest-asyncio==1.1.0"]
+
+[project.scripts]
+qwen3-tts-st = "qwen3_tts_st.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

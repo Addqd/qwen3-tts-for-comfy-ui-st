@@ -1,5 +1,7 @@
 # Диагностика
 
+> **Исторический документ.** Root-relative команды ниже требуют отдельный checkout commit `cc1d638a898784fcecb528ec95f7669507138cc2`; не запускайте их в активном qwentts.cpp проекте.
+
 ## Раньше BAT сообщал `ComfyUI project PID file is unavailable`
 
 Эта ошибка устранена. Если `http://127.0.0.1:8188` уже отвечает, а `runtime/comfyui.json` отсутствует или устарел, launcher находит PID TCP-listener и принимает процесс под управление **только** когда полный путь процесса точно совпадает с `ComfyUI_windows_portable\python_embeded\python.exe` текущего проекта.
@@ -9,9 +11,9 @@
 Сначала:
 
 ```powershell
-.\scripts\diagnose.ps1
-.\status.ps1
-Get-Content .\logs\server.err.log -Tail 100
+<legacy-checkout>\scripts\diagnose.ps1
+<legacy-checkout>\status.ps1
+Get-Content <legacy-checkout>\logs\server.err.log -Tail 100
 ```
 
 **Python 3.12 was not found.** На этой машине `py` пуст. Установите официальный CPython 3.12 или передайте существующий `python.exe` параметром `-Python`; глобальные пакеты не требуются.

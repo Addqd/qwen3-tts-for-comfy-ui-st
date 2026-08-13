@@ -18,6 +18,7 @@ $Python = Join-Path $Root "python_embeded\python.exe"
 $Main = Join-Path $Root "ComfyUI\main.py"
 if (-not (Test-Path -LiteralPath $Python)) { throw "ComfyUI embedded Python was not found: $Python" }
 if (-not (Test-Path -LiteralPath $Main)) { throw "ComfyUI main.py was not found: $Main" }
+Sync-QwenTTSManagedWorkflow -Settings $Settings | Out-Null
 
 if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
     $OldState = Get-Content -Raw -LiteralPath $script:ComfyUIStatePath | ConvertFrom-Json

@@ -1,10 +1,29 @@
 $StatePath = Join-Path $PSScriptRoot "runtime\server.json"
 if (-not (Test-Path -LiteralPath $StatePath)) { Write-Host "Qwen3-TTS: stopped"; exit 1 }
-$State = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json
-$Process = Get-Process -Id $State.pid -ErrorAction SilentlyContinue
-if (-not $Process) { Write-Host "Qwen3-TTS: stopped (stale PID $($State.pid))"; exit 1 }
+$State = Get-Content -Raw -LiteralPath $StatePath -Encoding UTF8 | ConvertFrom-Json
+
+function Test-ProjectProcessIdentity {
+    param($Record)
+    if (-not $Record) { return $false }
+    $Process = Get-Process -Id ([int]$Record.pid) -ErrorAction SilentlyContinue
+    if (-not $Process) { return $false }
+    try {
+        $ExpectedStart = [DateTime]::Parse([string]$Record.start_time).ToUniversalTime()
+        $ExpectedPath = [IO.Path]::GetFullPath([string]$Record.executable)
+        $ActualPath = [IO.Path]::GetFullPath([string]$Process.Path)
+        return (
+            [Math]::Abs(($Process.StartTime.ToUniversalTime() - $ExpectedStart).TotalSeconds) -le 2 -and
+            $ActualPath.Equals($ExpectedPath, [StringComparison]::OrdinalIgnoreCase)
+        )
+    } catch { return $false }
+}
+
+$Invalid = @()
+foreach ($Name in @("facade", "engine", "runner")) {
+    if (-not (Test-ProjectProcessIdentity -Record $State.$Name)) { $Invalid += $Name }
+}
+if ($Invalid.Count) { Write-Host "Qwen3-TTS: incomplete/stale process identity: $($Invalid -join ', ')"; exit 1 }
 try {
-    $Config = & (Join-Path $PSScriptRoot ".venv\Scripts\python.exe") -c "from qwen3_tts_st.config import load_config; import sys; c=load_config(sys.argv[1]); print(c.get('server.port'))" $State.config
-    $Health = Invoke-RestMethod -Uri "http://127.0.0.1:$Config/health" -TimeoutSec 5
-    $Health | ConvertTo-Json -Depth 5
-} catch { Write-Host "PID $($State.pid) is running but /health is unavailable: $($_.Exception.Message)"; exit 2 }
+    $Port = & (Join-Path $PSScriptRoot ".venv\Scripts\python.exe") -c "from qwen3_tts_st.config import load_config; import sys; print(load_config(sys.argv[1]).get('server.port',8020))" $State.config
+    Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5 | ConvertTo-Json -Depth 6
+} catch { Write-Host "Processes are running but /health is unavailable: $($_.Exception.Message)"; exit 2 }

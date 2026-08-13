@@ -1,305 +1,286 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
-import logging
-import math
+import re
 import shutil
-from dataclasses import asdict, dataclass
+import subprocess
+import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-import re
+from typing import Any
 
-import numpy as np
-import soundfile as sf
-
-from .emotion import ALLOWED_SOUNDS, ALLOWED_STYLES, SOUND_TYPES
+import httpx
 
 
-LOGGER = logging.getLogger(__name__)
-
-
-@dataclass
+@dataclass(frozen=True)
 class VoiceProfile:
     voice_id: str
-    character: str
     profile_id: str
     display_name: str
-    style: str
-    reference_audio: str
+    character: str
+    reference_path: Path
     ref_text: str
     language: str
-    clone_mode: str
     directory: Path
-    notes: str = ""
-    emotion_enabled: bool = True
-    emotion: str = "neutral"
-    sound_enabled: bool = False
-    sounds: tuple[str, ...] = ()
-
-    def public(self) -> dict:
-        result = asdict(self)
-        result.pop("directory")
-        result["reference_available"] = self.reference_path.exists()
-        return result
+    model_variant: str
 
     @property
-    def reference_path(self) -> Path:
-        return self.directory / self.reference_audio
+    def spk_path(self) -> Path:
+        return self.directory / "variants" / self.model_variant / "reference.spk"
+
+    @property
+    def rvq_path(self) -> Path:
+        return self.directory / "variants" / self.model_variant / "reference.rvq"
+
+    @property
+    def ready(self) -> bool:
+        return self.reference_path.exists() and self.spk_path.exists() and self.rvq_path.exists() and bool(self.ref_text)
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "voice_id": self.voice_id,
+            "profile_id": self.profile_id,
+            "display_name": self.display_name,
+            "character": self.character,
+            "language": self.language,
+            "model_variant": self.model_variant,
+            "ref_text": self.ref_text,
+            "reference_available": self.reference_path.exists(),
+            "spk_available": self.spk_path.exists(),
+            "rvq_available": self.rvq_path.exists(),
+            "ready": self.ready,
+        }
 
 
 def _safe_name(value: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ_-]+", "_", value.strip()).strip("_")
+    cleaned = re.sub(r"[^a-zA-Z0-9а-яА-ЯёЁ_-]+", "_", value.strip()).strip("_").lower()
     if not cleaned:
-        raise ValueError("имя профиля пусто после безопасной нормализации")
-    return cleaned.lower()
-
-
-def _normalize_sounds(value) -> tuple[str, ...]:
-    if value is None:
-        requested = []
-    elif isinstance(value, str):
-        requested = [item.strip().lower() for item in value.split(",") if item.strip()]
-    else:
-        requested = [str(item).strip().lower() for item in value if str(item).strip()]
-    unknown = sorted(set(requested) - ALLOWED_SOUNDS)
-    if unknown:
-        raise ValueError(f"unsupported sound capabilities: {', '.join(unknown)}")
-    return tuple(sound for sound in SOUND_TYPES if sound in requested)
-
-
-def validate_audio(path: Path, ref_text: str = "") -> dict:
-    try:
-        data, sample_rate = sf.read(path, dtype="float32", always_2d=True)
-    except Exception as exc:
-        return {"valid": False, "errors": [f"не удалось прочитать аудио: {exc}"], "warnings": []}
-    mono = data.mean(axis=1)
-    duration = len(mono) / sample_rate if sample_rate else 0.0
-    peak = float(np.max(np.abs(mono))) if len(mono) else 0.0
-    rms = float(math.sqrt(float(np.mean(np.square(mono))))) if len(mono) else 0.0
-    edge = max(1, min(len(mono) // 10, sample_rate // 2))
-    noise = np.concatenate((mono[:edge], mono[-edge:])) if len(mono) else np.array([0.0])
-    noise_rms = float(math.sqrt(float(np.mean(np.square(noise)))))
-    snr_db = 20 * math.log10(max(rms, 1e-9) / max(noise_rms, 1e-9))
-    errors: list[str] = []
-    warnings: list[str] = []
-    if duration < 1.0:
-        errors.append("референс короче 1 секунды")
-    if duration > 30.0:
-        warnings.append("референс длиннее 30 секунд; рекомендуется 3–15 секунд")
-    if sample_rate < 16000:
-        warnings.append("sample rate ниже 16 kHz")
-    if data.shape[1] > 1:
-        warnings.append("стерео будет сведено в моно моделью")
-    if peak >= 0.999:
-        warnings.append("обнаружен возможный clipping")
-    if rms < 0.005:
-        errors.append("аудио слишком тихое")
-    if snr_db < 10:
-        warnings.append("оценочный уровень фонового шума высок")
-    if not ref_text.strip():
-        errors.append("для ICL требуется точная транскрипция ref_text")
-    return {
-        "valid": not errors,
-        "errors": errors,
-        "warnings": warnings,
-        "duration_seconds": round(duration, 3),
-        "sample_rate": sample_rate,
-        "channels": data.shape[1],
-        "peak": round(peak, 5),
-        "rms": round(rms, 5),
-        "estimated_snr_db": round(snr_db, 2),
-    }
+        raise ValueError("Profile name is empty after safe normalization")
+    return cleaned
 
 
 class VoiceLibrary:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, config: Any):
         self.root = root
         self.profiles_root = root / "profiles"
         self.backups_root = root / "backups"
+        self.config = config
+        self.model_variant, self.talker_model, self.codec_model = config.qwentts_model()
         self.profiles_root.mkdir(parents=True, exist_ok=True)
-        self.backups_root.mkdir(parents=True, exist_ok=True)
         self.profiles: dict[str, VoiceProfile] = {}
+        self._create_lock = asyncio.Lock()
         self.reload()
-
-    def _is_legacy_backup(self, metadata_path: Path) -> bool:
-        relative = metadata_path.relative_to(self.profiles_root)
-        return any(".backup-" in part.lower() for part in relative.parts[:-1])
 
     def reload(self) -> int:
         found: dict[str, VoiceProfile] = {}
-        for metadata_path in self.profiles_root.rglob("metadata.json"):
-            if self._is_legacy_backup(metadata_path):
-                continue
+        for path in self.profiles_root.rglob("metadata.json"):
             try:
-                data = json.loads(metadata_path.read_text(encoding="utf-8"))
-                display = str(data["display_name"])
-                legacy_style = str(data.get("style", "neutral"))
-                emotion_value = str(data.get("emotion", legacy_style))
-                emotion = emotion_value.lower()
-                emotion_enabled = bool(data.get("emotion_enabled", True))
-                unsupported_emotion = emotion not in ALLOWED_STYLES
-                if unsupported_emotion:
-                    LOGGER.warning(
-                        "Loaded legacy voice profile %s with unsupported style %s; emotion routing disabled",
-                        data.get("profile_id", display),
-                        emotion_value,
-                    )
-                    emotion_enabled = False
-                sounds = _normalize_sounds(data.get("sounds", []))
+                data = json.loads(path.read_text(encoding="utf-8-sig"))
+                profile_id = str(data["profile_id"])
+                display_name = str(data.get("display_name") or profile_id)
                 profile = VoiceProfile(
-                    voice_id=f"clone:{display}",
-                    character=str(data["character"]),
-                    profile_id=str(data["profile_id"]),
-                    display_name=display,
-                    style=legacy_style if unsupported_emotion else emotion,
-                    reference_audio=str(data.get("reference_audio", "reference.wav")),
-                    ref_text=str(data.get("ref_text", "")),
+                    voice_id=f"clone:{display_name}",
+                    profile_id=profile_id,
+                    display_name=display_name,
+                    character=str(data.get("character") or display_name),
+                    reference_path=path.parent / str(data.get("reference_audio", "reference.wav")),
+                    ref_text=str(data.get("ref_text", "")).strip(),
                     language=str(data.get("language", "Russian")),
-                    clone_mode=str(data.get("clone_mode", "icl")),
-                    notes=str(data.get("notes", "")),
-                    directory=metadata_path.parent,
-                    emotion_enabled=emotion_enabled,
-                    emotion=emotion_value if unsupported_emotion else emotion,
-                    sound_enabled=bool(data.get("sound_enabled", bool(sounds))),
-                    sounds=sounds,
+                    directory=path.parent,
+                    model_variant=self.model_variant,
                 )
-                found[profile.voice_id.lower()] = profile
-                found[profile.profile_id.lower()] = profile
-                found[profile.display_name.lower()] = profile
-            except (KeyError, ValueError, json.JSONDecodeError):
+                if self._migrate_legacy_q8_assets(profile.directory):
+                    self._record_variant(profile.directory, "q8")
+                for key in (profile.voice_id, profile.profile_id, profile.display_name):
+                    found[key.lower()] = profile
+            except (OSError, KeyError, ValueError, json.JSONDecodeError):
                 continue
         self.profiles = found
         return len({profile.profile_id for profile in found.values()})
 
-    def list(self) -> list[dict]:
+    def list(self, ready_only: bool = True) -> list[dict[str, Any]]:
         unique = {profile.profile_id: profile for profile in self.profiles.values()}
-        return [profile.public() for profile in sorted(unique.values(), key=lambda item: item.display_name.lower())]
+        values = [profile for profile in unique.values() if profile.ready or not ready_only]
+        return [profile.public() for profile in sorted(values, key=lambda item: item.display_name.lower())]
 
-    def resolve(self, voice: str, fallback: str | None = None) -> VoiceProfile:
+    def resolve(self, voice: str) -> VoiceProfile:
         profile = self.profiles.get(voice.lower())
-        if profile is None and fallback:
-            profile = self.profiles.get(fallback.lower())
         if profile is None:
-            raise KeyError(f"голосовой профиль не найден: {voice}")
-        if not profile.reference_path.exists():
-            raise FileNotFoundError(f"у профиля {profile.display_name} отсутствует reference.wav")
+            raise KeyError(f"Voice profile not found: {voice}")
+        if not profile.ready:
+            raise FileNotFoundError(f"Voice profile is not prepared for qwentts: {voice}")
         return profile
 
-    def find_style(self, character: str, style: str, fallback: VoiceProfile) -> VoiceProfile:
-        unique = sorted(
-            {profile.profile_id: profile for profile in self.profiles.values()}.values(),
-            key=lambda item: (item.profile_id.lower(), item.display_name.lower()),
-        )
-        for profile in unique:
-            if (
-                profile.character.lower() == character.lower()
-                and profile.emotion_enabled
-                and profile.emotion.lower() == style.lower()
-                and profile.reference_path.exists()
-            ):
-                return profile
-        return fallback
+    @staticmethod
+    def _migrate_legacy_q8_assets(directory: Path) -> bool:
+        legacy_spk = directory / "reference.spk"
+        legacy_rvq = directory / "reference.rvq"
+        q8 = directory / "variants" / "q8"
+        if legacy_spk.exists() and legacy_rvq.exists() and not (q8 / "reference.spk").exists() and not (q8 / "reference.rvq").exists():
+            q8.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy_spk, q8 / "reference.spk")
+            shutil.copy2(legacy_rvq, q8 / "reference.rvq")
+            legacy_spk.unlink()
+            legacy_rvq.unlink()
+            return True
+        return False
 
-    def find_sound(self, character: str, sound_type: str, preferred_emotion: str | None = None) -> VoiceProfile | None:
-        requested = sound_type.strip().lower()
-        if requested not in ALLOWED_SOUNDS:
-            raise ValueError(f"unsupported sound capability: {sound_type}")
-        candidates = sorted(
-            (
-                profile
-                for profile in {item.profile_id: item for item in self.profiles.values()}.values()
-                if profile.character.lower() == character.lower()
-                and profile.sound_enabled
-                and requested in profile.sounds
-                and profile.reference_path.exists()
-            ),
-            key=lambda item: (item.profile_id.lower(), item.display_name.lower()),
-        )
-        if preferred_emotion:
-            matching = [
-                profile
-                for profile in candidates
-                if profile.emotion_enabled and profile.emotion.lower() == preferred_emotion.lower()
-            ]
-            if matching:
-                return matching[0]
-        return candidates[0] if candidates else None
-
-    def resolve_family_neutral(self, selected: VoiceProfile, configured_fallback: str | None = None) -> VoiceProfile:
-        """Return the deterministic neutral base for a selected voice family."""
-
-        def is_neutral_speech(profile: VoiceProfile) -> bool:
-            return (
-                profile.emotion_enabled
-                and profile.emotion.lower() == "neutral"
-                and profile.style.lower() == "neutral"
-                and profile.reference_path.exists()
-            )
-
-        neutral = self.find_style(selected.character, "neutral", selected)
-        if is_neutral_speech(neutral):
-            return neutral
-
-        if configured_fallback:
-            safe = self.resolve(configured_fallback)
-            safe_neutral = self.find_style(safe.character, "neutral", safe)
-            if is_neutral_speech(safe_neutral):
-                return safe_neutral
-
-        raise KeyError(
-            f"для voice family {selected.character} отсутствует neutral-профиль и безопасный fallback"
-        )
-
-    def create(self, source: Path, metadata: dict, overwrite: bool = False) -> tuple[VoiceProfile, dict]:
-        validation = validate_audio(source, str(metadata.get("ref_text", "")))
-        if not validation["valid"]:
-            raise ValueError("; ".join(validation["errors"]))
-        character_dir = _safe_name(str(metadata["character"]))
-        emotion = str(metadata.get("emotion", metadata.get("style", "neutral"))).lower()
-        if emotion not in ALLOWED_STYLES:
-            raise ValueError(f"unsupported emotion capability: {emotion}")
-        emotion_enabled = bool(metadata.get("emotion_enabled", True))
-        sounds = _normalize_sounds(metadata.get("sounds", []))
-        sound_enabled = bool(metadata.get("sound_enabled", bool(sounds)))
-        if sound_enabled and not sounds:
-            raise ValueError("sound profile is enabled but no sound capabilities were selected")
-        if not emotion_enabled and not sound_enabled:
-            raise ValueError("enable at least one emotion or sound profile capability")
-        if not sound_enabled:
-            sounds = ()
-        style_dir = _safe_name(emotion)
-        profile_id = str(metadata.get("profile_id") or f"{character_dir}_{style_dir}")
-        target_dir = style_dir if emotion_enabled else _safe_name(profile_id)
-        target = self.profiles_root / character_dir / target_dir
-        if target.exists() and any(target.iterdir()):
-            if not overwrite:
-                raise FileExistsError(f"профиль уже существует: {target}")
-            backup_parent = self.backups_root / character_dir
-            backup_parent.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-            backup_base = style_dir if emotion_enabled else target_dir
-            backup = backup_parent / f"{backup_base}-{timestamp}"
-            shutil.copytree(target, backup)
-        target.mkdir(parents=True, exist_ok=True)
-        reference = target / "reference.wav"
-        shutil.copy2(source, reference)
-        payload = {
-            "character": metadata["character"],
-            "profile_id": profile_id,
-            "display_name": metadata.get("display_name") or (
-                f"{metadata['character']}{style_dir.title()}" if emotion_enabled else profile_id
-            ),
-            "style": emotion,
-            "emotion_enabled": emotion_enabled,
-            "emotion": emotion,
-            "sound_enabled": sound_enabled,
-            "sounds": list(sounds),
-            "reference_audio": "reference.wav",
-            "ref_text": metadata["ref_text"],
-            "language": metadata.get("language", "Russian"),
-            "clone_mode": metadata.get("clone_mode", "icl"),
-            "notes": metadata.get("notes", ""),
+    @staticmethod
+    def _record_variant(directory: Path, variant: str) -> None:
+        metadata_path = directory / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
+        voice_assets = metadata.setdefault("voice_assets", {})
+        variants = voice_assets.setdefault("variants", {})
+        variants[variant] = {
+            "spk": f"variants/{variant}/reference.spk",
+            "rvq": f"variants/{variant}/reference.rvq",
         }
-        (target / "metadata.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        self.reload()
-        return self.resolve(f"clone:{payload['display_name']}"), validation
+        temporary = directory / "metadata.json.tmp"
+        temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(metadata_path)
+
+    def _encode(self, reference: Path, variant_dir: Path) -> tuple[Path, Path]:
+        executable = self.config.path("qwentts.codec_executable", "runtime/qwentts/bin/qwen-codec.exe")
+        for required in (executable, self.talker_model, self.codec_model):
+            if not required.exists():
+                raise FileNotFoundError(f"Required qwentts {self.model_variant} file is missing: {required}")
+        variant_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f"qwentts-{self.model_variant}-", dir=reference.parent) as folder:
+            working = Path(folder) / "reference.wav"
+            shutil.copy2(reference, working)
+            result = subprocess.run(
+                [str(executable), "--model", str(self.codec_model), "--talker", str(self.talker_model), "-i", str(working)],
+                cwd=working.parent,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"qwen-codec failed ({result.returncode}): {result.stderr[-1000:]}")
+            spk, rvq = working.with_suffix(".spk"), working.with_suffix(".rvq")
+            if not spk.exists() or not rvq.exists():
+                raise RuntimeError("qwen-codec completed without reference.spk/reference.rvq")
+            shutil.move(spk, variant_dir / "reference.spk")
+            shutil.move(rvq, variant_dir / "reference.rvq")
+        return variant_dir / "reference.spk", variant_dir / "reference.rvq"
+
+    async def _prepare(self, profile: VoiceProfile) -> VoiceProfile:
+        if not profile.ready and profile.reference_path.exists() and profile.ref_text:
+            await asyncio.to_thread(self._encode, profile.reference_path, profile.spk_path.parent)
+            self._record_variant(profile.directory, self.model_variant)
+        return profile
+
+    @staticmethod
+    async def register(profile: VoiceProfile, client: httpx.AsyncClient) -> None:
+        payload = {
+            "name": profile.voice_id,
+            "ref_text": profile.ref_text,
+            "spk_b64": base64.b64encode(profile.spk_path.read_bytes()).decode("ascii"),
+            "rvq_b64": base64.b64encode(profile.rvq_path.read_bytes()).decode("ascii"),
+        }
+        response = await client.post("/v1/audio/voices", json=payload)
+        response.raise_for_status()
+
+    async def register_all(self, client: httpx.AsyncClient) -> int:
+        unique = {profile.profile_id: profile for profile in self.profiles.values()}
+        ready = [await self._prepare(profile) for profile in unique.values()]
+        ready = [profile for profile in ready if profile.ready]
+        for profile in ready:
+            await self.register(profile, client)
+        return len(ready)
+
+    async def create(
+        self,
+        source: Path,
+        profile_name: str,
+        character_name: str,
+        ref_text: str,
+        language: str,
+        overwrite: bool,
+        client: httpx.AsyncClient,
+    ) -> VoiceProfile:
+        async with self._create_lock:
+            if language != "Russian":
+                raise ValueError("The active production server is configured for Russian")
+            if not ref_text.strip():
+                raise ValueError("Exact ref_text is required for ICL cloning")
+            safe = _safe_name(profile_name)
+            target = self.profiles_root / safe
+            target_populated = target.exists() and any(target.iterdir())
+            if target_populated and not overwrite:
+                raise FileExistsError(f"Profile already exists: {profile_name}")
+
+            previous = next(
+                (profile for profile in set(self.profiles.values()) if profile.directory == target and profile.ready),
+                None,
+            )
+            staging = Path(tempfile.mkdtemp(prefix=f".{safe}-staging-", dir=self.profiles_root))
+            backup: Path | None = None
+            try:
+                reference = staging / "reference.wav"
+                shutil.copy2(source, reference)
+                variant_dir = staging / "variants" / self.model_variant
+                await asyncio.to_thread(self._encode, reference, variant_dir)
+                metadata = {
+                    "schema": 2,
+                    "profile_id": profile_name,
+                    "display_name": profile_name,
+                    "character": character_name,
+                    "reference_audio": "reference.wav",
+                    "ref_text": ref_text.strip(),
+                    "language": language,
+                    "engine": "qwentts.cpp",
+                    "voice_assets": {
+                        "variants": {self.model_variant: {"spk": f"variants/{self.model_variant}/reference.spk", "rvq": f"variants/{self.model_variant}/reference.rvq"}},
+                    },
+                }
+                (staging / "metadata.json").write_text(
+                    json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+                if target.exists():
+                    backup = self.backups_root / f"{safe}-{datetime.now():%Y%m%d-%H%M%S-%f}"
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    target.replace(backup)
+                try:
+                    staging.replace(target)
+                except Exception:
+                    if backup is not None and backup.exists() and not target.exists():
+                        backup.replace(target)
+                    raise
+
+                try:
+                    self.reload()
+                    replacement = self.resolve(f"clone:{profile_name}")
+                    await self.register(replacement, client)
+                except Exception as registration_error:
+                    failed = self.profiles_root / f".{safe}-failed-{datetime.now():%Y%m%d-%H%M%S-%f}"
+                    rollback_error = None
+                    try:
+                        target.replace(failed)
+                        if backup is not None:
+                            backup.replace(target)
+                        shutil.rmtree(failed, ignore_errors=True)
+                    except OSError as exc:
+                        rollback_error = exc
+                    self.reload()
+                    if rollback_error is None and previous is not None:
+                        try:
+                            restored = self.resolve(previous.profile_id)
+                            await self.register(restored, client)
+                        except Exception as exc:  # preserve the original registration failure
+                            rollback_error = exc
+                    if rollback_error is not None:
+                        raise RuntimeError(
+                            f"Replacement registration failed and runtime rollback failed: {rollback_error}"
+                        ) from registration_error
+                    raise
+                return replacement
+            finally:
+                if staging.exists():
+                    shutil.rmtree(staging, ignore_errors=True)

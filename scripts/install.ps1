@@ -1,9 +1,5 @@
 [CmdletBinding()]
-param(
-    [string]$Python = "",
-    [ValidateSet("CPU", "CUDA126")][string]$TorchVariant = "CPU",
-    [switch]$SkipModelCheck
-)
+param([string]$Python = "", [switch]$SkipRuntimeCheck)
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
@@ -15,34 +11,34 @@ try {
     if (-not $Python) {
         $PyLauncher = Get-Command py -ErrorAction SilentlyContinue
         if ($PyLauncher) {
-            $Candidates = & py -0p 2>$null
-            $Line = $Candidates | Where-Object { $_ -match "3\.12" } | Select-Object -First 1
+            $Line = (& py -0p 2>$null) | Where-Object { $_ -match "3\.12" } | Select-Object -First 1
             if ($Line -and $Line -match "([A-Za-z]:\\.*python\.exe)$") { $Python = $Matches[1] }
         }
     }
     if (-not $Python) {
-        $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
-        if ($PythonCommand -and $PythonCommand.Source -notmatch "WindowsApps") { $Python = $PythonCommand.Source }
+        $Command = Get-Command python -ErrorAction SilentlyContinue
+        if ($Command -and $Command.Source -notmatch "WindowsApps") { $Python = $Command.Source }
     }
-    if (-not $Python -or -not (Test-Path -LiteralPath $Python)) {
-        throw "Python 3.12 was not found. Retry: .\scripts\install.ps1 -Python 'C:\path\to\python.exe'"
-    }
-    $Version = & $Python --version 2>&1
-    if ($Version -notmatch "Python 3\.12\.") { throw "Python 3.12 is required; found: $Version" }
+    if (-not $Python -or -not (Test-Path -LiteralPath $Python)) { throw "Python 3.12 was not found." }
+    $VersionOutput = & $Python --version 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Unable to run the selected Python interpreter (exit $LASTEXITCODE)." }
+    if ($VersionOutput -notmatch "Python 3\.12\.") { throw "Python 3.12 is required." }
     $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-    if (-not (Test-Path -LiteralPath $VenvPython)) { & $Python -m venv (Join-Path $ProjectRoot ".venv") }
+    if (-not (Test-Path -LiteralPath $VenvPython)) {
+        & $Python -m venv (Join-Path $ProjectRoot ".venv")
+        if ($LASTEXITCODE -ne 0) { throw "Virtual environment creation failed (exit $LASTEXITCODE)." }
+    }
     & $VenvPython -m pip install "uv==0.12.2"
+    if ($LASTEXITCODE -ne 0) { throw "uv installation failed (exit $LASTEXITCODE)." }
     $env:UV_CACHE_DIR = Join-Path $ProjectRoot ".cache\uv"
-    & $VenvPython -m uv pip install --python $VenvPython --no-build-isolation -e "$ProjectRoot[test]"
-    if ($TorchVariant -eq "CUDA126") {
-        & $VenvPython -m uv pip install --python $VenvPython --reinstall "torch==2.11.0+cu126" "torchaudio==2.11.0+cu126" --index-url "https://download.pytorch.org/whl/cu126"
-    }
+    & $VenvPython -m uv pip install --python $VenvPython -e "$ProjectRoot[test]"
+    if ($LASTEXITCODE -ne 0) { throw "Project dependency installation failed (exit $LASTEXITCODE)." }
     & $VenvPython -m uv pip check
-    & $VenvPython -c "import fastapi, torch, qwen_tts, soundfile; print('Imports OK'); print('torch', torch.__version__, 'CUDA', torch.cuda.is_available())"
-    if (-not $SkipModelCheck) {
-        & $VenvPython -c "from qwen3_tts_st.config import load_config; c=load_config(); assert c.get('model.id') == 'Qwen/Qwen3-TTS-12Hz-0.6B-Base'; print('Model config OK:', c.get('model.id'))"
-    }
-    & $VenvPython -m uv pip freeze | Set-Content -LiteralPath (Join-Path $ProjectRoot "requirements.lock.txt") -Encoding UTF8
+    if ($LASTEXITCODE -ne 0) { throw "Installed dependency validation failed (exit $LASTEXITCODE)." }
+    & $VenvPython -c "import fastapi,httpx,pydantic,yaml; import qwen3_tts_st; print('Lightweight facade imports OK')"
+    if ($LASTEXITCODE -ne 0) { throw "Lightweight facade import check failed (exit $LASTEXITCODE)." }
+    & (Join-Path $PSScriptRoot "ensure-qwentts-models.ps1") -Config (Join-Path $ProjectRoot "config\config.local.yaml") -AllModels
+    if (-not $SkipRuntimeCheck) { & (Join-Path $PSScriptRoot "verify-qwentts-runtime.ps1") -AllModels | Format-List }
     Write-Host "Installation completed. Log: $LogPath"
 } finally {
     Stop-Transcript | Out-Null
