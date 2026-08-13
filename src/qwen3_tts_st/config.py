@@ -52,6 +52,29 @@ class AppConfig:
             raise ValueError(f"qwentts model registry entry is incomplete: {variant}")
         return variant, self.path(f"{prefix}.talker_model", ""), self.path(f"{prefix}.codec_model", "")
 
+    def configured_qwentts_variant(self) -> str:
+        override: dict[str, Any] = {}
+        if self.source.exists():
+            override = yaml.safe_load(self.source.read_text(encoding="utf-8")) or {}
+        variant = str(override.get("qwentts", {}).get("active_model", self.qwentts_model()[0])).strip().lower()
+        if variant not in {"bf16", "q8"}:
+            raise ValueError(f"Unknown qwentts.active_model: {variant}. Supported values: bf16, q8")
+        return variant
+
+    def persist_qwentts_variant(self, variant: str) -> str:
+        selected = variant.strip().lower()
+        if selected not in {"bf16", "q8"}:
+            raise ValueError(f"Unknown qwentts.active_model: {selected}. Supported values: bf16, q8")
+        override: dict[str, Any] = {}
+        if self.source.exists():
+            override = yaml.safe_load(self.source.read_text(encoding="utf-8")) or {}
+        override.setdefault("qwentts", {})["active_model"] = selected
+        self.source.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(f"{self.source}.tmp")
+        temporary.write_text(yaml.safe_dump(override, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        temporary.replace(self.source)
+        return selected
+
 
 def load_config(path: str | Path | None = None) -> AppConfig:
     example = PROJECT_ROOT / "config" / "config.example.yaml"
@@ -60,4 +83,4 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     if selected.exists() and selected != example:
         override = yaml.safe_load(selected.read_text(encoding="utf-8")) or {}
         data = _merge(data, override)
-    return AppConfig(data, selected if selected.exists() else example)
+    return AppConfig(data, selected)

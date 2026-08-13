@@ -37,29 +37,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Installed dependency validation failed (exit $LASTEXITCODE)." }
     & $VenvPython -c "import fastapi,httpx,pydantic,yaml; import qwen3_tts_st; print('Lightweight facade imports OK')"
     if ($LASTEXITCODE -ne 0) { throw "Lightweight facade import check failed (exit $LASTEXITCODE)." }
-    $Manifest = Get-Content -Raw -LiteralPath (Join-Path $ProjectRoot "config\qwentts-runtime.json") -Encoding UTF8 | ConvertFrom-Json
-    $ModelDir = Join-Path $ProjectRoot "runtime\qwentts\models"
-    New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
-    foreach ($Asset in $Manifest.models.files.PSObject.Properties) {
-        $Destination = Join-Path $ModelDir $Asset.Name
-        if (Test-Path -LiteralPath $Destination) {
-            $Existing = (Get-FileHash -Algorithm SHA256 -LiteralPath $Destination).Hash.ToLowerInvariant()
-            if ($Existing -eq ([string]$Asset.Value).ToLowerInvariant()) { continue }
-        }
-        $Temporary = "$Destination.download"
-        $Url = ([string]$Manifest.models.download_base_url).TrimEnd('/') + "/" + $Asset.Name + "?download=true"
-        try {
-            Invoke-WebRequest -Uri $Url -OutFile $Temporary -UseBasicParsing
-            $Actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Temporary).Hash.ToLowerInvariant()
-            if ($Actual -ne ([string]$Asset.Value).ToLowerInvariant()) {
-                throw "Downloaded model hash mismatch: $($Asset.Name)"
-            }
-            Move-Item -LiteralPath $Temporary -Destination $Destination -Force
-        } finally {
-            if (Test-Path -LiteralPath $Temporary) { Remove-Item -LiteralPath $Temporary -Force }
-        }
-    }
-    if (-not $SkipRuntimeCheck) { & (Join-Path $PSScriptRoot "verify-qwentts-runtime.ps1") | Format-List }
+    & (Join-Path $PSScriptRoot "ensure-qwentts-models.ps1") -Config (Join-Path $ProjectRoot "config\config.local.yaml") -AllModels
+    if (-not $SkipRuntimeCheck) { & (Join-Path $PSScriptRoot "verify-qwentts-runtime.ps1") -AllModels | Format-List }
     Write-Host "Installation completed. Log: $LogPath"
 } finally {
     Stop-Transcript | Out-Null

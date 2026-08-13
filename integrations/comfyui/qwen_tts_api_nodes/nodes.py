@@ -17,6 +17,7 @@ import numpy as np
 CATEGORY = "Qwen TTS API"
 VERSION = "1.0.0"
 PRODUCTION_MODEL = "Qwen3-TTS 1.7B Base (tts-1-ru)"
+MODEL_VARIANTS = ("BF16 Quality (default)", "Q8_0 Fast")
 NORMALIZATION_OPTIONS = ("Use Backend Default", "Off", "Basic Russian", "Full Russian")
 
 
@@ -127,6 +128,10 @@ def _ui_result(name: str, result: tuple, value: Any) -> dict:
     return {"ui": {name: [value]}, "result": result}
 
 
+def _model_variant(value: str) -> str:
+    return "q8" if value == "Q8_0 Fast" else "bf16"
+
+
 class QwenTTSServerNode:
     @classmethod
     def INPUT_TYPES(cls):
@@ -158,6 +163,7 @@ class QwenTTSRuntimeSettingsNode:
             "required": {
                 "server": ("QWEN_TTS_SERVER",),
                 "apply_and_save": ("BOOLEAN", {"default": False}),
+                "model_variant": (list(MODEL_VARIANTS), {"default": "BF16 Quality (default)"}),
                 "language": (["Russian"], {"default": "Russian"}),
                 "russian_normalization": (["Off", "Basic Russian", "Full Russian"], {"default": "Full Russian"}),
                 "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647}),
@@ -178,10 +184,11 @@ class QwenTTSRuntimeSettingsNode:
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
 
-    def configure(self, server, apply_and_save, language, russian_normalization, seed, max_new_tokens,
+    def configure(self, server, apply_and_save, model_variant, language, russian_normalization, seed, max_new_tokens,
                   temperature, top_k, top_p, repetition_penalty, pronunciation_defaults=""):
         if apply_and_save:
             payload = {
+                "model_variant": _model_variant(model_variant),
                 "language": language,
                 "russian_normalization": _normalization(russian_normalization),
                 "pronunciation_defaults": _pronunciation(pronunciation_defaults),

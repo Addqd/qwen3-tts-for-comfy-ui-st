@@ -52,6 +52,7 @@ class SpeechRequest(BaseModel):
 
 
 class RuntimeSettingsRequest(BaseModel):
+    model_variant: Literal["bf16", "q8"] | None = None
     language: Literal["Russian"] = "Russian"
     russian_normalization: Literal["off", "basic", "full"]
     pronunciation_defaults: dict[str, str] | str = Field(default_factory=dict)
@@ -158,15 +159,33 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
 
     @app.get("/admin/runtime-settings")
     async def runtime_settings():
-        return {"status": "ok", "settings": app.state.tts.settings.current()}
+        configured = active_config.configured_qwentts_variant()
+        loaded = app.state.tts.model_variant
+        return {"status": "ok", "settings": {
+            "model_variant": configured,
+            "loaded_model_variant": loaded,
+            "model_restart_required": configured != loaded,
+            **app.state.tts.settings.current(),
+        }}
 
     @app.put("/admin/runtime-settings")
     async def save_runtime_settings(request: RuntimeSettingsRequest):
         try:
-            settings = app.state.tts.settings.update(request.model_dump())
+            changes = request.model_dump()
+            requested_variant = changes.pop("model_variant")
+            configured = active_config.configured_qwentts_variant()
+            if requested_variant is not None:
+                configured = active_config.persist_qwentts_variant(requested_variant)
+            settings = app.state.tts.settings.update(changes)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"status": "ok", "settings": settings}
+        loaded = app.state.tts.model_variant
+        return {"status": "ok", "settings": {
+            "model_variant": configured,
+            "loaded_model_variant": loaded,
+            "model_restart_required": configured != loaded,
+            **settings,
+        }}
 
     @app.get("/metrics")
     async def metrics():

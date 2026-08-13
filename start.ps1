@@ -16,6 +16,7 @@ if (Test-Path -LiteralPath $StatePath) {
     $Existing = Get-Content -Raw -LiteralPath $StatePath -Encoding UTF8 | ConvertFrom-Json
     if (Get-Process -Id ([int]$Existing.facade.pid) -ErrorAction SilentlyContinue) { throw "Backend is already running, PID $($Existing.facade.pid)" }
 }
+& (Join-Path $ProjectRoot "scripts\ensure-qwentts-models.ps1") -Config $ConfigPath
 & (Join-Path $ProjectRoot "scripts\verify-qwentts-runtime.ps1") -Config $ConfigPath | Out-Null
 $ConfigJson = & $Python -c "from qwen3_tts_st.config import load_config; import json,sys; c=load_config(sys.argv[1]); variant,talker,codec=c.qwentts_model(); print(json.dumps({'public':int(c.get('server.port',8020)),'engine':int(c.get('qwentts.port',8030)),'variant':variant,'talker':talker.name,'codec':codec.name}))" $ConfigPath | ConvertFrom-Json
 foreach ($Port in @([int]$ConfigJson.public,[int]$ConfigJson.engine)) {
