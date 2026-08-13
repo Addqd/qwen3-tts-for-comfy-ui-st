@@ -47,8 +47,8 @@ $MissingTypes = @($Workflow.nodes.type | Sort-Object -Unique | Where-Object { $n
 if ($MissingTypes.Count) { throw "Canonical workflow has missing nodes: $($MissingTypes -join ', ')" }
 
 $EmbeddedPython = Join-Path $Settings.install_path "python_embeded\python.exe"
-$HasHeavyBackend = & $EmbeddedPython -c "import importlib.util; print(any(importlib.util.find_spec(x) is not None for x in ('qwen_tts','torch','transformers')))"
-if ($LASTEXITCODE -ne 0 -or $HasHeavyBackend.Trim() -ne "False") { throw "A neural Python backend is unexpectedly installed in ComfyUI Python." }
+$HasQwenBackend = & $EmbeddedPython -c "import importlib.util; print(importlib.util.find_spec('qwen_tts') is not None)"
+if ($LASTEXITCODE -ne 0 -or $HasQwenBackend.Trim() -ne "False") { throw "The qwen_tts neural backend is unexpectedly installed in ComfyUI Python." }
 
 $PromptId = $null
 if (-not $SkipSynthesis) {
@@ -107,7 +107,7 @@ if (@($Queue.queue_running).Count -or @($Queue.queue_pending).Count) { throw "Co
     canonical_workflow=(Split-Path -Leaf $WorkflowPath)
     workflow_schema=$Workflow.extra.qwen_tts_workflow_schema
     canonical_full_graph=(-not [bool]$SkipSynthesis)
-    heavy_backend_in_comfyui_python=[bool]::Parse($HasHeavyBackend.Trim())
+    heavy_backend_in_comfyui_python=[bool]::Parse($HasQwenBackend.Trim())
     synthesis_skipped=[bool]$SkipSynthesis
     synthesis_prompt_id=$PromptId
 } | ConvertTo-Json -Depth 6

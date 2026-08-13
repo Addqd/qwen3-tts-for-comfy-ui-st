@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import subprocess
 import tempfile
@@ -32,6 +33,7 @@ class TTSService:
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
             self.engine_revision = "unknown"
         self.lock = asyncio.Lock()
+        self.lock_timeout_seconds = float(config.get("qwentts.queue_timeout_seconds", 30))
         self.started_at = time.time()
         self.completed = 0
         self.failed = 0
@@ -45,6 +47,17 @@ class TTSService:
 
     async def shutdown(self) -> None:
         await self.client.aclose()
+
+    @asynccontextmanager
+    async def _synthesis_slot(self):
+        try:
+            await asyncio.wait_for(self.lock.acquire(), timeout=self.lock_timeout_seconds)
+        except TimeoutError as exc:
+            raise RuntimeError("qwentts engine is busy; retry later") from exc
+        try:
+            yield
+        finally:
+            self.lock.release()
 
     async def health(self) -> dict[str, Any]:
         engine_health: dict[str, Any] = {}
@@ -134,7 +147,7 @@ class TTSService:
             return output.read_bytes(), media[response_format]
 
     async def synthesize(self, request: Any) -> tuple[bytes, str, dict[str, Any]]:
-        async with self.lock:
+        async with self._synthesis_slot():
             started = time.perf_counter()
             try:
                 voice = request.voice or self.default_voice

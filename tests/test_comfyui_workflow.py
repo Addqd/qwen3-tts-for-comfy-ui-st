@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 NODES_PATH = ROOT / "integrations" / "comfyui" / "qwen_tts_api_nodes" / "nodes.py"
@@ -65,6 +67,8 @@ def test_comfyui_smoke_requires_explicit_input_write_opt_in():
     script = (ROOT / "scripts" / "test-comfyui-integration.ps1").read_text(encoding="utf-8-sig")
     assert "[switch]$AllowComfyUIInputWrite" in script
     assert "if (-not $AllowComfyUIInputWrite)" in script
+    assert "find_spec('qwen_tts')" in script
+    assert "('qwen_tts','torch','transformers')" not in script
 
 
 def test_managed_workflow_marker_rejects_empty_target_before_path_resolution():
@@ -72,3 +76,44 @@ def test_managed_workflow_marker_rejects_empty_target_before_path_resolution():
     empty_guard = script.index("[string]::IsNullOrWhiteSpace([string]$Info.target)")
     path_resolution = script.index("[IO.Path]::GetFullPath([string]$Info.target)")
     assert empty_guard < path_resolution
+
+
+class _Waveform:
+    shape = (1, 1, 24000)
+
+
+def _stub_synthesis(module, monkeypatch, tmp_path):
+    monkeypatch.setattr(module, "_temp_dir", lambda: tmp_path)
+    monkeypatch.setattr(module, "_json_request", lambda *_args, **_kwargs: (b"source-audio", {}))
+    monkeypatch.setattr(module, "_load_comfy_audio", lambda _path: {"waveform": _Waveform(), "sample_rate": 24000})
+    monkeypatch.setattr(module, "_audio_to_wav_bytes", lambda _audio: b"converted-wav")
+    return module.QwenTTSSynthesizeNode(), {"endpoint": "http://127.0.0.1:8020", "timeout": 1}
+
+
+def test_synthesize_uses_collision_resistant_paths(monkeypatch, tmp_path):
+    module = load_nodes()
+    node, server = _stub_synthesis(module, monkeypatch, tmp_path)
+    first = node.synthesize(server, "text", "clone:test", 1.0, "wav", "Full Russian")["result"][1]
+    second = node.synthesize(server, "text", "clone:test", 1.0, "wav", "Full Russian")["result"][1]
+    assert first != second
+    assert Path(first).exists() and Path(second).exists()
+
+
+def test_non_wav_synthesis_removes_source_and_reports_returned_wav(monkeypatch, tmp_path):
+    module = load_nodes()
+    node, server = _stub_synthesis(module, monkeypatch, tmp_path)
+    result = node.synthesize(server, "text", "clone:test", 1.0, "mp3", "Full Russian")["result"]
+    returned = Path(result[1])
+    assert returned.suffix == ".wav" and returned.read_bytes() == b"converted-wav"
+    assert not list(tmp_path.glob("*.mp3"))
+    assert json.loads(result[2])["format"] == "wav"
+
+
+def test_clone_rejects_incomplete_api_response(monkeypatch):
+    module = load_nodes()
+    monkeypatch.setattr(module, "_audio_to_wav_bytes", lambda _audio: b"wav")
+    monkeypatch.setattr(module, "_json_request", lambda *_args, **_kwargs: ({"voice_id": "clone:test"}, {}))
+    with pytest.raises(RuntimeError, match="missing required field.*validation, metadata"):
+        module.QwenTTSCloneVoiceNode().clone(
+            {"endpoint": "http://127.0.0.1:8020", "timeout": 1}, {}, "text", "test", "Test", "Russian", False
+        )

@@ -169,6 +169,37 @@ def test_invalid_persisted_runtime_settings_fall_back_to_defaults(tmp_path):
     assert RuntimeSettingsStore(config).current()["top_p"] == 0.9
 
 
+def test_runtime_settings_persistence_failure_keeps_memory_unchanged(tmp_path, monkeypatch):
+    config = load_config(ROOT / "config" / "config.example.yaml")
+    config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")
+    store = RuntimeSettingsStore(config)
+    before = store.current()
+
+    def fail_replace(_path: Path, _destination: Path):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="disk unavailable"):
+        store.update({"top_p": 0.8})
+    assert store.current() == before
+
+
+@pytest.mark.asyncio
+async def test_synthesis_lock_wait_is_bounded(tmp_path):
+    config = load_config(ROOT / "config" / "config.example.yaml")
+    config.data["voices"]["library_dir"] = str(tmp_path / "voices")
+    config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")
+    config.data["qwentts"]["queue_timeout_seconds"] = 0.01
+    service = TTSService(config)
+    await service.lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="engine is busy"):
+            await service.synthesize(object())
+    finally:
+        service.lock.release()
+        await service.client.aclose()
+
+
 def test_runner_state_failure_stops_child(tmp_path):
     path = ROOT / "scripts" / "qwentts-runner.py"
     spec = importlib.util.spec_from_file_location("qwentts_runner_test", path)

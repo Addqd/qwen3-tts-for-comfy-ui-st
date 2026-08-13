@@ -5,10 +5,10 @@ import io
 import json
 from pathlib import Path
 import tempfile
-import time
 from typing import Any
 from urllib import error, request
 from urllib.parse import urlsplit
+import uuid
 import wave
 
 import numpy as np
@@ -228,6 +228,11 @@ class QwenTTSCloneVoiceNode:
             "language": language,
             "overwrite": overwrite,
         })
+        if not isinstance(result, dict):
+            raise RuntimeError("Qwen TTS clone response must be a JSON object")
+        missing = [field for field in ("voice_id", "validation", "metadata") if field not in result]
+        if missing:
+            raise RuntimeError(f"Qwen TTS clone response is missing required field(s): {', '.join(missing)}")
         return result["voice_id"], json.dumps(result["validation"], ensure_ascii=False), json.dumps(result["metadata"], ensure_ascii=False)
 
 
@@ -282,20 +287,21 @@ class QwenTTSSynthesizeNode:
         }
         payload.update({key: value for key, value in optional.items() if value is not None})
         body, headers = _json_request(server, "/v1/audio/speech", payload)
-        stamp = int(time.time() * 1000)
-        response_path = _temp_dir() / f"qwen-tts-{stamp}.{response_format}"
+        unique_id = uuid.uuid4().hex
+        response_path = _temp_dir() / f"qwen-tts-{unique_id}.{response_format}"
         response_path.write_bytes(body)
         audio = _load_comfy_audio(response_path)
         path = response_path
         if response_format != "wav":
-            path = _temp_dir() / f"qwen-tts-{stamp}.wav"
+            path = _temp_dir() / f"qwen-tts-{unique_id}.wav"
             path.write_bytes(_audio_to_wav_bytes(audio))
+            response_path.unlink()
         duration = float(headers.get("X-Audio-Duration", audio["waveform"].shape[-1] / audio["sample_rate"]))
         metadata = json.dumps({
             "model": "tts-1-ru",
             "engine": headers.get("X-TTS-Engine", "qwentts.cpp"),
             "voice": voice,
-            "format": response_format,
+            "format": path.suffix.removeprefix("."),
             "duration": duration,
             "node_version": VERSION,
         }, ensure_ascii=False)

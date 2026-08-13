@@ -60,9 +60,10 @@ class RuntimeSettingsStore:
         unknown = set(changes) - set(self.defaults)
         if unknown:
             raise ValueError(f"Unknown runtime settings: {', '.join(sorted(unknown))}")
-        self._settings = self._validate({**self._settings, **changes})
+        candidate = self._validate({**self._settings, **changes})
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = Path(f"{self.path}.tmp")
-        temporary.write_text(json.dumps(self._settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(json.dumps(candidate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.path)
+        self._settings = candidate
         return self.current()

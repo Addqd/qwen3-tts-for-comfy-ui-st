@@ -14,6 +14,7 @@ qwentts:
   backend: CUDA0
   max_batch: 1
   request_timeout_seconds: 900
+  queue_timeout_seconds: 30
 
 voices:
   library_dir: voice_library
