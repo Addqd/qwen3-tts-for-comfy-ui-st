@@ -40,10 +40,14 @@ def main() -> int:
     runtime.mkdir(parents=True, exist_ok=True)
     logs.mkdir(parents=True, exist_ok=True)
     executable = config.path("qwentts.executable", "runtime/qwentts/bin/tts-server.exe")
+    model_variant, talker_model, codec_model = config.qwentts_model()
+    for required in (executable, talker_model, codec_model):
+        if not required.exists():
+            raise FileNotFoundError(f"Required qwentts {model_variant} runtime file is missing: {required}")
     command = [
         str(executable),
-        "--model", str(config.path("qwentts.talker_model", "runtime/qwentts/models/qwen-talker-1.7b-base-Q8_0.gguf")),
-        "--codec", str(config.path("qwentts.codec_model", "runtime/qwentts/models/qwen-tokenizer-12hz-Q8_0.gguf")),
+        "--model", str(talker_model),
+        "--codec", str(codec_model),
         "--alias", str(config.get("qwentts.model_id", "tts-1-ru")),
         "--host", "127.0.0.1",
         "--port", str(int(config.get("qwentts.port", 8030))),
@@ -64,6 +68,9 @@ def main() -> int:
             "runner_parent_pid": os.getppid(),
             "executable": str(executable),
             "command": command,
+            "model_variant": model_variant,
+            "talker_model": talker_model.name,
+            "codec_model": codec_model.name,
             "session_id": session_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }

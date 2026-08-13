@@ -16,7 +16,7 @@ import numpy as np
 
 CATEGORY = "Qwen TTS API"
 VERSION = "1.0.0"
-PRODUCTION_MODEL = "Qwen3-TTS 1.7B Base Q8_0 (tts-1-ru)"
+PRODUCTION_MODEL = "Qwen3-TTS 1.7B Base (tts-1-ru)"
 NORMALIZATION_OPTIONS = ("Use Backend Default", "Off", "Basic Russian", "Full Russian")
 
 
@@ -145,7 +145,7 @@ class QwenTTSServerNode:
         server = {"endpoint": _endpoint(endpoint), "timeout": timeout, "model": "tts-1-ru", "response_format": response_format}
         try:
             health, _ = _json_request(server, "/health")
-            status = f"ok: qwentts.cpp / {health.get('device')} / voices={health.get('voice_count')}"
+            status = f"ok: qwentts.cpp / {health.get('model_variant')} / {health.get('device')} / voices={health.get('voice_count')}"
         except RuntimeError as exc:
             status = f"unavailable: {exc}"
         return server, status

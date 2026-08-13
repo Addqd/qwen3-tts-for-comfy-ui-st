@@ -17,7 +17,7 @@ if (Test-Path -LiteralPath $StatePath) {
     if (Get-Process -Id ([int]$Existing.facade.pid) -ErrorAction SilentlyContinue) { throw "Backend is already running, PID $($Existing.facade.pid)" }
 }
 & (Join-Path $ProjectRoot "scripts\verify-qwentts-runtime.ps1") -Config $ConfigPath | Out-Null
-$ConfigJson = & $Python -c "from qwen3_tts_st.config import load_config; import json,sys; c=load_config(sys.argv[1]); print(json.dumps({'public':int(c.get('server.port',8020)),'engine':int(c.get('qwentts.port',8030))}))" $ConfigPath | ConvertFrom-Json
+$ConfigJson = & $Python -c "from qwen3_tts_st.config import load_config; import json,sys; c=load_config(sys.argv[1]); variant,talker,codec=c.qwentts_model(); print(json.dumps({'public':int(c.get('server.port',8020)),'engine':int(c.get('qwentts.port',8030)),'variant':variant,'talker':talker.name,'codec':codec.name}))" $ConfigPath | ConvertFrom-Json
 foreach ($Port in @([int]$ConfigJson.public,[int]$ConfigJson.engine)) {
     $Listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
     if ($Listener) { throw "Port $Port is already used by PID $($Listener.OwningProcess -join ',')" }
@@ -65,7 +65,7 @@ try {
     }
     $State | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StatePath -Encoding UTF8
     Write-Host "Qwen3-TTS facade: $PublicUrl"
-    Write-Host "Engine: qwentts.cpp / CUDA0 / Qwen3-TTS 1.7B Base Q8_0 (PID $($Engine.Id))"
+    Write-Host "Engine: qwentts.cpp / CUDA0 / $($Health.model_variant) / $($Health.model_file) (PID $($Engine.Id))"
     Write-Host "Default voice: $($Health.default_voice)"
 } catch {
     if ($Facade -and -not $Facade.HasExited) { Stop-Process -Id $Facade.Id -ErrorAction SilentlyContinue }

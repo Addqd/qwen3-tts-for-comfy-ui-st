@@ -27,6 +27,7 @@ class AppConfig:
         for key in ("server.host", "qwentts.host", "comfyui.host"):
             if str(self.get(key, "127.0.0.1")) != "127.0.0.1":
                 raise ValueError(f"Security: {key} must be exactly 127.0.0.1")
+        self.qwentts_model()
 
     def get(self, dotted: str, default: Any = None) -> Any:
         current: Any = self.data
@@ -39,6 +40,17 @@ class AppConfig:
     def path(self, dotted: str, default: str) -> Path:
         value = Path(str(self.get(dotted, default)))
         return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
+
+    def qwentts_model(self) -> tuple[str, Path, Path]:
+        variant = str(self.get("qwentts.active_model", "bf16")).strip().lower()
+        if variant not in {"bf16", "q8"}:
+            raise ValueError(f"Unknown qwentts.active_model: {variant}. Supported values: bf16, q8")
+        prefix = f"qwentts.models.{variant}"
+        talker = self.get(f"{prefix}.talker_model")
+        codec = self.get(f"{prefix}.codec_model")
+        if not talker or not codec:
+            raise ValueError(f"qwentts model registry entry is incomplete: {variant}")
+        return variant, self.path(f"{prefix}.talker_model", ""), self.path(f"{prefix}.codec_model", "")
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

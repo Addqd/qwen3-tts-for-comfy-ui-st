@@ -21,6 +21,7 @@ from .voices import VoiceLibrary
 class TTSService:
     def __init__(self, config: Any):
         self.config = config
+        self.model_variant, self.talker_model, self.codec_model = config.qwentts_model()
         self.settings = RuntimeSettingsStore(config)
         self.library = VoiceLibrary(config.path("voices.library_dir", "voice_library"), config)
         self.default_voice = str(config.get("voices.default_voice", "clone:test_ru_dima_neutral"))
@@ -86,7 +87,8 @@ class TTSService:
             "engine": "qwentts.cpp",
             "engine_revision": self.engine_revision,
             "model": "tts-1-ru",
-            "model_file": self.config.path("qwentts.talker_model", "").name,
+            "model_variant": self.model_variant,
+            "model_file": self.talker_model.name,
             "device": device,
             "qwentts_ready": qwentts_ready,
             "qwentts_url": self.qwentts_url,

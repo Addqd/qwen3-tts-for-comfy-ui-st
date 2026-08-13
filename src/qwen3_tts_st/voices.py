@@ -25,14 +25,15 @@ class VoiceProfile:
     ref_text: str
     language: str
     directory: Path
+    model_variant: str
 
     @property
     def spk_path(self) -> Path:
-        return self.directory / "reference.spk"
+        return self.directory / "variants" / self.model_variant / "reference.spk"
 
     @property
     def rvq_path(self) -> Path:
-        return self.directory / "reference.rvq"
+        return self.directory / "variants" / self.model_variant / "reference.rvq"
 
     @property
     def ready(self) -> bool:
@@ -45,6 +46,7 @@ class VoiceProfile:
             "display_name": self.display_name,
             "character": self.character,
             "language": self.language,
+            "model_variant": self.model_variant,
             "ref_text": self.ref_text,
             "reference_available": self.reference_path.exists(),
             "spk_available": self.spk_path.exists(),
@@ -66,6 +68,7 @@ class VoiceLibrary:
         self.profiles_root = root / "profiles"
         self.backups_root = root / "backups"
         self.config = config
+        self.model_variant, self.talker_model, self.codec_model = config.qwentts_model()
         self.profiles_root.mkdir(parents=True, exist_ok=True)
         self.profiles: dict[str, VoiceProfile] = {}
         self._create_lock = asyncio.Lock()
@@ -87,7 +90,10 @@ class VoiceLibrary:
                     ref_text=str(data.get("ref_text", "")).strip(),
                     language=str(data.get("language", "Russian")),
                     directory=path.parent,
+                    model_variant=self.model_variant,
                 )
+                if self._migrate_legacy_q8_assets(profile.directory):
+                    self._record_variant(profile.directory, "q8")
                 for key in (profile.voice_id, profile.profile_id, profile.display_name):
                     found[key.lower()] = profile
             except (OSError, KeyError, ValueError, json.JSONDecodeError):
@@ -108,27 +114,65 @@ class VoiceLibrary:
             raise FileNotFoundError(f"Voice profile is not prepared for qwentts: {voice}")
         return profile
 
-    def _encode(self, reference: Path) -> tuple[Path, Path]:
+    @staticmethod
+    def _migrate_legacy_q8_assets(directory: Path) -> bool:
+        legacy_spk = directory / "reference.spk"
+        legacy_rvq = directory / "reference.rvq"
+        q8 = directory / "variants" / "q8"
+        if legacy_spk.exists() and legacy_rvq.exists() and not (q8 / "reference.spk").exists() and not (q8 / "reference.rvq").exists():
+            q8.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy_spk, q8 / "reference.spk")
+            shutil.copy2(legacy_rvq, q8 / "reference.rvq")
+            legacy_spk.unlink()
+            legacy_rvq.unlink()
+            return True
+        return False
+
+    @staticmethod
+    def _record_variant(directory: Path, variant: str) -> None:
+        metadata_path = directory / "metadata.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
+        voice_assets = metadata.setdefault("voice_assets", {})
+        variants = voice_assets.setdefault("variants", {})
+        variants[variant] = {
+            "spk": f"variants/{variant}/reference.spk",
+            "rvq": f"variants/{variant}/reference.rvq",
+        }
+        temporary = directory / "metadata.json.tmp"
+        temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(metadata_path)
+
+    def _encode(self, reference: Path, variant_dir: Path) -> tuple[Path, Path]:
         executable = self.config.path("qwentts.codec_executable", "runtime/qwentts/bin/qwen-codec.exe")
-        talker = self.config.path("qwentts.talker_model", "runtime/qwentts/models/qwen-talker-1.7b-base-Q8_0.gguf")
-        codec = self.config.path("qwentts.codec_model", "runtime/qwentts/models/qwen-tokenizer-12hz-Q8_0.gguf")
-        for required in (executable, talker, codec):
+        for required in (executable, self.talker_model, self.codec_model):
             if not required.exists():
-                raise FileNotFoundError(f"Required qwentts file is missing: {required}")
-        result = subprocess.run(
-            [str(executable), "--model", str(codec), "--talker", str(talker), "-i", str(reference)],
-            cwd=reference.parent,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"qwen-codec failed ({result.returncode}): {result.stderr[-1000:]}")
-        spk, rvq = reference.with_suffix(".spk"), reference.with_suffix(".rvq")
-        if not spk.exists() or not rvq.exists():
-            raise RuntimeError("qwen-codec completed without reference.spk/reference.rvq")
-        return spk, rvq
+                raise FileNotFoundError(f"Required qwentts {self.model_variant} file is missing: {required}")
+        variant_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f"qwentts-{self.model_variant}-", dir=reference.parent) as folder:
+            working = Path(folder) / "reference.wav"
+            shutil.copy2(reference, working)
+            result = subprocess.run(
+                [str(executable), "--model", str(self.codec_model), "--talker", str(self.talker_model), "-i", str(working)],
+                cwd=working.parent,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"qwen-codec failed ({result.returncode}): {result.stderr[-1000:]}")
+            spk, rvq = working.with_suffix(".spk"), working.with_suffix(".rvq")
+            if not spk.exists() or not rvq.exists():
+                raise RuntimeError("qwen-codec completed without reference.spk/reference.rvq")
+            shutil.move(spk, variant_dir / "reference.spk")
+            shutil.move(rvq, variant_dir / "reference.rvq")
+        return variant_dir / "reference.spk", variant_dir / "reference.rvq"
+
+    async def _prepare(self, profile: VoiceProfile) -> VoiceProfile:
+        if not profile.ready and profile.reference_path.exists() and profile.ref_text:
+            await asyncio.to_thread(self._encode, profile.reference_path, profile.spk_path.parent)
+            self._record_variant(profile.directory, self.model_variant)
+        return profile
 
     @staticmethod
     async def register(profile: VoiceProfile, client: httpx.AsyncClient) -> None:
@@ -143,7 +187,8 @@ class VoiceLibrary:
 
     async def register_all(self, client: httpx.AsyncClient) -> int:
         unique = {profile.profile_id: profile for profile in self.profiles.values()}
-        ready = [profile for profile in unique.values() if profile.ready]
+        ready = [await self._prepare(profile) for profile in unique.values()]
+        ready = [profile for profile in ready if profile.ready]
         for profile in ready:
             await self.register(profile, client)
         return len(ready)
@@ -178,7 +223,8 @@ class VoiceLibrary:
             try:
                 reference = staging / "reference.wav"
                 shutil.copy2(source, reference)
-                await asyncio.to_thread(self._encode, reference)
+                variant_dir = staging / "variants" / self.model_variant
+                await asyncio.to_thread(self._encode, reference, variant_dir)
                 metadata = {
                     "schema": 2,
                     "profile_id": profile_name,
@@ -188,7 +234,9 @@ class VoiceLibrary:
                     "ref_text": ref_text.strip(),
                     "language": language,
                     "engine": "qwentts.cpp",
-                    "voice_assets": {"spk": "reference.spk", "rvq": "reference.rvq"},
+                    "voice_assets": {
+                        "variants": {self.model_variant: {"spk": f"variants/{self.model_variant}/reference.spk", "rvq": f"variants/{self.model_variant}/reference.rvq"}},
+                    },
                 }
                 (staging / "metadata.json").write_text(
                     json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
