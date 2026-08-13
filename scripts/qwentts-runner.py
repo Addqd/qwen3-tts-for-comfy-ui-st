@@ -5,8 +5,28 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from qwen3_tts_st.config import load_config
+
+
+def persist_state_or_stop(
+    process: subprocess.Popen[bytes], state_path: Path, temporary_state: Path, state: dict[str, object]
+) -> None:
+    try:
+        temporary_state.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+        temporary_state.replace(state_path)
+    except Exception:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=15)
+        temporary_state.unlink(missing_ok=True)
+        state_path.unlink(missing_ok=True)
+        raise
 
 
 def main() -> int:
@@ -32,10 +52,22 @@ def main() -> int:
     ]
     environment = os.environ.copy()
     environment["GGML_BACKEND"] = str(config.get("qwentts.backend", "CUDA0"))
+    state_path = runtime / "qwentts.json"
+    temporary_state = runtime / "qwentts.json.tmp"
+    session_id = uuid4().hex
     with (logs / "qwentts.out.log").open("wb", buffering=0) as stdout, (logs / "qwentts.err.log").open("wb", buffering=0) as stderr:
+        stderr.write(f"[qwen3-tts-st] session={session_id}\n".encode("ascii"))
         process = subprocess.Popen(command, cwd=executable.parent, env=environment, stdout=stdout, stderr=stderr)
-        state = {"pid": process.pid, "executable": str(executable), "command": command}
-        (runtime / "qwentts.json").write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+        state = {
+            "pid": process.pid,
+            "runner_pid": os.getpid(),
+            "runner_parent_pid": os.getppid(),
+            "executable": str(executable),
+            "command": command,
+            "session_id": session_id,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+        persist_state_or_stop(process, state_path, temporary_state, state)
         return process.wait()
 
 

@@ -29,9 +29,17 @@ def main() -> int:
     output = root / "artifacts" / "audio-tests" / "sillytavern-qwentts-smoke.mp3"
     output.parent.mkdir(parents=True, exist_ok=True)
     with httpx.Client(timeout=args.timeout) as client:
-        health = client.get(f"{backend}/health").json()
-        models = client.get(f"{backend}/v1/models").json()
-        voices = client.get(f"{backend}/v1/voices").json()
+        health_response = client.get(f"{backend}/health")
+        health_response.raise_for_status()
+        health = health_response.json()
+        if health.get("engine") != "qwentts.cpp" or health.get("qwentts_ready") is not True:
+            raise RuntimeError("The active backend is not a ready project qwentts.cpp facade")
+        models_response = client.get(f"{backend}/v1/models")
+        models_response.raise_for_status()
+        models = models_response.json()
+        voices_response = client.get(f"{backend}/v1/voices")
+        voices_response.raise_for_status()
+        voices = voices_response.json()
         if "tts-1-ru" not in [item["id"] for item in models["data"]]:
             raise RuntimeError("tts-1-ru is unavailable")
         if args.voice not in [item["voice_id"] for item in voices["data"]]:

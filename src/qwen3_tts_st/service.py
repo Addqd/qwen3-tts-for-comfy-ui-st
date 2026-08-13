@@ -24,7 +24,13 @@ class TTSService:
         self.library = VoiceLibrary(config.path("voices.library_dir", "voice_library"), config)
         self.default_voice = str(config.get("voices.default_voice", "clone:test_ru_dima_neutral"))
         self.qwentts_url = f"http://127.0.0.1:{int(config.get('qwentts.port', 8030))}"
+        self.qwentts_state_path = config.path("qwentts.state_file", "runtime/qwentts.json")
         self.client = httpx.AsyncClient(base_url=self.qwentts_url, timeout=float(config.get("qwentts.request_timeout_seconds", 900)))
+        provenance_path = config.path("qwentts.provenance_file", "config/qwentts-runtime.json")
+        try:
+            self.engine_revision = str(json.loads(provenance_path.read_text(encoding="utf-8"))["upstream"]["revision"])
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            self.engine_revision = "unknown"
         self.lock = asyncio.Lock()
         self.started_at = time.time()
         self.completed = 0
@@ -41,18 +47,34 @@ class TTSService:
         await self.client.aclose()
 
     async def health(self) -> dict[str, Any]:
+        engine_health: dict[str, Any] = {}
         try:
             response = await self.client.get("/health")
             qwentts_ready = response.status_code == 200
+            if qwentts_ready:
+                parsed = response.json()
+                if isinstance(parsed, dict):
+                    engine_health = parsed
         except httpx.HTTPError:
             qwentts_ready = False
+        except (TypeError, ValueError, json.JSONDecodeError):
+            qwentts_ready = False
+        device = None
+        if qwentts_ready:
+            device = engine_health.get("device") or engine_health.get("backend") or engine_health.get("talker_backend")
+            if device is None:
+                try:
+                    state = json.loads(self.qwentts_state_path.read_text(encoding="utf-8-sig"))
+                    device = state.get("verified_backend")
+                except (OSError, AttributeError, TypeError, ValueError, json.JSONDecodeError):
+                    device = None
         return {
             "status": "ok" if qwentts_ready else "degraded",
             "engine": "qwentts.cpp",
-            "engine_revision": "7b6ed4f6db964c14fd3ac36c1ca13f1ce6150f4e",
+            "engine_revision": self.engine_revision,
             "model": "tts-1-ru",
             "model_file": self.config.path("qwentts.talker_model", "").name,
-            "device": "CUDA0",
+            "device": device,
             "qwentts_ready": qwentts_ready,
             "qwentts_url": self.qwentts_url,
             "default_voice": self.default_voice,
@@ -63,18 +85,25 @@ class TTSService:
 
     @staticmethod
     def _wav_duration(payload: bytes) -> float:
-        with tempfile.SpooledTemporaryFile() as handle:
-            handle.write(payload)
-            handle.seek(0)
-            with wave.open(handle, "rb") as wav:
-                return wav.getnframes() / wav.getframerate()
+        try:
+            with tempfile.SpooledTemporaryFile() as handle:
+                handle.write(payload)
+                handle.seek(0)
+                with wave.open(handle, "rb") as wav:
+                    return wav.getnframes() / wav.getframerate()
+        except (EOFError, wave.Error) as exc:
+            raise RuntimeError("qwentts returned invalid WAV audio") from exc
 
     @staticmethod
     def _convert(payload: bytes, response_format: str, speed: float) -> tuple[bytes, str]:
-        if response_format == "wav" and speed == 1.0:
-            return payload, "audio/wav"
         suffixes = {"wav": "wav", "mp3": "mp3", "flac": "flac", "opus": "opus", "aac": "m4a"}
         media = {"wav": "audio/wav", "mp3": "audio/mpeg", "flac": "audio/flac", "opus": "audio/ogg", "aac": "audio/mp4"}
+        if response_format not in suffixes:
+            raise ValueError(f"Unsupported audio response format: {response_format}")
+        if not 0.25 <= float(speed) <= 4.0:
+            raise ValueError("speed must be between 0.25 and 4.0")
+        if response_format == "wav" and speed == 1.0:
+            return payload, "audio/wav"
         with tempfile.TemporaryDirectory(prefix="qwentts-format-") as folder:
             source = Path(folder) / "source.wav"
             output = Path(folder) / f"output.{suffixes[response_format]}"
@@ -92,9 +121,14 @@ class TTSService:
                 factors.append(remaining)
                 command += ["-filter:a", ",".join(f"atempo={factor:.8g}" for factor in factors)]
             command += [str(output)]
-            result = subprocess.run(command, capture_output=True, timeout=120, check=False)
+            try:
+                result = subprocess.run(command, capture_output=True, timeout=120, check=False)
+            except FileNotFoundError as exc:
+                raise RuntimeError("FFmpeg is required for format or speed conversion but was not found in PATH") from exc
             if result.returncode != 0:
                 raise RuntimeError(f"FFmpeg conversion failed: {result.stderr.decode(errors='replace')[-1000:]}")
+            if not output.exists():
+                raise RuntimeError("FFmpeg conversion completed without an output file")
             return output.read_bytes(), media[response_format]
 
     async def synthesize(self, request: Any) -> tuple[bytes, str, dict[str, Any]]:

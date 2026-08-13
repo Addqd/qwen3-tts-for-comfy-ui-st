@@ -26,7 +26,8 @@ def preprocess(text: str, settings: dict) -> str:
         value = LINK_RE.sub(r"\1", value)
         value = MARKDOWN_RE.sub("", value)
     for source, replacement in (settings.get("russian_abbreviations", {}) or {}).items():
-        value = re.sub(re.escape(str(source)), str(replacement), value, flags=re.I)
+        literal = str(replacement)
+        value = re.sub(re.escape(str(source)), lambda _match, replacement=literal: replacement, value, flags=re.I)
     value = re.sub(r"[ \t]+", " ", value)
     value = re.sub(r"\s*\n\s*", "\n", value)
     return value.strip()

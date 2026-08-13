@@ -314,7 +314,11 @@ class QwenTTSVoiceSelectorNode:
     OUTPUT_NODE = True
 
     def select(self, server, voice):
-        result, _ = _json_request(server, "/v1/voices")
+        try:
+            result, _ = _json_request(server, "/v1/voices")
+        except RuntimeError as exc:
+            status = f"unavailable: {exc}"
+            return _ui_result("qwen_tts_voices", (voice, status), status)
         voices = [item["voice_id"] for item in result.get("data", [])]
         status = ", ".join(voices)
         if voice.lower() not in {item.lower() for item in voices}:
@@ -333,7 +337,12 @@ class QwenTTSModelsNode:
     OUTPUT_NODE = True
 
     def list_models(self, server):
-        result, _ = _json_request(server, "/v1/models")
+        try:
+            result, _ = _json_request(server, "/v1/models")
+        except RuntimeError as exc:
+            unavailable = {"status": "unavailable", "detail": str(exc)}
+            rendered = json.dumps(unavailable, ensure_ascii=False)
+            return _ui_result("qwen_tts_models", ("", rendered), unavailable)
         models = result.get("data", [])
         names = ", ".join(str(item.get("id", "")) for item in models if item.get("id"))
         return _ui_result("qwen_tts_models", (names, json.dumps(models, ensure_ascii=False)), models)
@@ -350,8 +359,13 @@ class QwenTTSHealthNode:
     OUTPUT_NODE = True
 
     def check(self, server):
-        health, _ = _json_request(server, "/health")
-        voices, _ = _json_request(server, "/v1/voices")
+        try:
+            health, _ = _json_request(server, "/health")
+            voices, _ = _json_request(server, "/v1/voices")
+        except RuntimeError as exc:
+            unavailable = {"status": "unavailable", "detail": str(exc)}
+            result = (False, "unknown", "tts-1-ru", "", json.dumps(unavailable, ensure_ascii=False))
+            return _ui_result("qwen_tts_health", result, unavailable)
         names = ", ".join(item["voice_id"] for item in voices.get("data", []))
         result = (health.get("status") == "ok", str(health.get("device")), "tts-1-ru", names, json.dumps(health, ensure_ascii=False))
         return _ui_result("qwen_tts_health", result, health)

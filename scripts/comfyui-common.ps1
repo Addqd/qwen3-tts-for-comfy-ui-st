@@ -59,6 +59,39 @@ function Test-LocalPortInUse {
     return [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners().Port -contains $Port
 }
 
+function Sync-QwenTTSManagedWorkflow {
+    param($Settings)
+
+    $Source = (Resolve-Path -LiteralPath (Join-Path $script:ProjectRoot "integrations\comfyui\example_workflows\voice_profile_from_wav_ru.json")).Path
+    $ComfyRoot = (Resolve-Path -LiteralPath ([string]$Settings.install_path)).Path
+    $WorkflowRoot = Join-Path $ComfyRoot "ComfyUI\user\default\workflows"
+    $Target = Join-Path $WorkflowRoot "voice_profile_from_wav_ru.json"
+    $Marker = Join-Path $WorkflowRoot ".qwen_tts_voice_profile_workflow.json"
+
+    if (-not (Test-Path -LiteralPath $Marker)) {
+        if (Test-Path -LiteralPath $Target) {
+            Write-Warning "An unmarked user workflow exists at $Target and was not overwritten. Open the canonical repository JSON directly."
+        } else {
+            Write-Host "Canonical Qwen TTS workflow is opened directly from: $Source"
+        }
+        return $false
+    }
+
+    try { $Info = Get-Content -Raw -LiteralPath $Marker -Encoding UTF8 | ConvertFrom-Json } catch {
+        throw "Managed workflow marker is unreadable; no workflow was changed."
+    }
+    $ExpectedTarget = [IO.Path]::GetFullPath($Target)
+    $MarkedTarget = [IO.Path]::GetFullPath([string]$Info.target)
+    if ([string]$Info.workflow -ne "voice_profile_from_wav_ru.json" -or
+        -not $MarkedTarget.Equals($ExpectedTarget, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Managed workflow marker failed its safety checks; no workflow was changed."
+    }
+    New-Item -ItemType Directory -Force -Path $WorkflowRoot | Out-Null
+    Copy-Item -LiteralPath $Source -Destination $Target -Force
+    Write-Host "Managed canonical Qwen TTS workflow synchronized: $Target"
+    return $true
+}
+
 function Assert-QwenTTSCloneVoiceSchema {
     param([string]$Url = "", $Objects = $null)
 

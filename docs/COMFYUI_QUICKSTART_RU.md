@@ -4,6 +4,8 @@
 
 `integrations/comfyui/example_workflows/voice_profile_from_wav_ru.json`
 
+Открывайте этот канонический JSON прямо из репозитория. Launcher автоматически обновляет только копию с project ownership marker; одноимённые пользовательские workflow без marker никогда не перезаписываются.
+
 Canonical workflow:
 
 ```text

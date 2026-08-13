@@ -1,5 +1,7 @@
 # Qwen3-TTS: единое руководство
 
+> **Исторический документ.** Команды относятся только к отдельному checkout legacy commit `cc1d638a898784fcecb528ec95f7669507138cc2`. Не запускайте их из корня активного проекта: там они управляют qwentts.cpp.
+
 Проект — локальный TTS engine для Windows. Backend на `127.0.0.1:8020` единолично загружает Qwen, хранит voice library и применяет весь quality pipeline. ComfyUI — Voice Lab и панель настройки. OpenAI-compatible клиенты, включая будущее подключение SillyTavern, могут оставаться простыми клиентами.
 
 ## Установка и запуск
@@ -7,16 +9,16 @@
 Используется Python 3.12 и только проектная `.venv`. Если окружение уже существует и `pip check` проходит, повторная установка не нужна.
 
 ```powershell
-.\scripts\install.ps1 -Python "C:\path\to\Python312\python.exe" -TorchVariant CPU
-.\start.ps1
-.\status.ps1
-.\stop.ps1
+<legacy-checkout>\scripts\install.ps1 -Python "C:\path\to\Python312\python.exe" -TorchVariant CPU
+<legacy-checkout>\start.ps1
+<legacy-checkout>\status.ps1
+<legacy-checkout>\stop.ps1
 ```
 
 Backend + проектная ComfyUI:
 
 ```powershell
-.\scripts\start-tts-and-comfyui.ps1
+<legacy-checkout>\scripts\start-tts-and-comfyui.ps1
 ```
 
 Для двойного щелчка есть `start-tts.bat` и `start-tts-and-comfyui.bat`. Backend слушает только localhost. ComfyUI обычно доступна на `http://127.0.0.1:8188`.

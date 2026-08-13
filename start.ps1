@@ -16,7 +16,7 @@ if (Test-Path -LiteralPath $StatePath) {
     $Existing = Get-Content -Raw -LiteralPath $StatePath -Encoding UTF8 | ConvertFrom-Json
     if (Get-Process -Id ([int]$Existing.facade.pid) -ErrorAction SilentlyContinue) { throw "Backend is already running, PID $($Existing.facade.pid)" }
 }
-& (Join-Path $ProjectRoot "scripts\verify-qwentts-runtime.ps1") -Config $Config | Out-Null
+& (Join-Path $ProjectRoot "scripts\verify-qwentts-runtime.ps1") -Config $ConfigPath | Out-Null
 $ConfigJson = & $Python -c "from qwen3_tts_st.config import load_config; import json,sys; c=load_config(sys.argv[1]); print(json.dumps({'public':int(c.get('server.port',8020)),'engine':int(c.get('qwentts.port',8030))}))" $ConfigPath | ConvertFrom-Json
 foreach ($Port in @([int]$ConfigJson.public,[int]$ConfigJson.engine)) {
     $Listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
@@ -33,11 +33,19 @@ try {
         try { $null = Invoke-RestMethod -Uri "http://127.0.0.1:$($ConfigJson.engine)/health" -TimeoutSec 2; $EngineReady = $true } catch { }
     } while (-not $EngineReady -and (Get-Date) -lt $EngineDeadline)
     if (-not $EngineReady) { throw "qwentts did not answer /health within $WaitSeconds seconds" }
-    if (-not (Select-String -LiteralPath (Join-Path $ProjectRoot "logs\qwentts.err.log") -Pattern "Talker backend: CUDA0" -Quiet)) {
-        throw "qwentts started without confirmed CUDA0 backend"
-    }
     $QwenState = Get-Content -Raw -LiteralPath $QwenStatePath -Encoding UTF8 | ConvertFrom-Json
     $Engine = Get-Process -Id ([int]$QwenState.pid) -ErrorAction Stop
+    if ([int]$QwenState.runner_parent_pid -ne $Runner.Id -or -not $QwenState.session_id) {
+        throw "qwentts runtime state does not belong to the current runner session"
+    }
+    $SessionLog = Join-Path $ProjectRoot "logs\qwentts.err.log"
+    $SessionMarker = "[qwen3-tts-st] session=$($QwenState.session_id)"
+    $CurrentLog = if (Test-Path -LiteralPath $SessionLog) { Get-Content -Raw -LiteralPath $SessionLog -Encoding UTF8 } else { "" }
+    if (-not $CurrentLog.Contains($SessionMarker) -or -not $CurrentLog.Contains("Talker backend: CUDA0")) {
+        throw "qwentts started without current-session confirmation of CUDA0 backend"
+    }
+    $QwenState | Add-Member -NotePropertyName verified_backend -NotePropertyValue "CUDA0" -Force
+    $QwenState | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $QwenStatePath -Encoding UTF8
 
     $Facade = Start-Process -FilePath $Python -ArgumentList @("-m","qwen3_tts_st.cli","--config",$ConfigPath) -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
     $PublicUrl = "http://127.0.0.1:$($ConfigJson.public)"

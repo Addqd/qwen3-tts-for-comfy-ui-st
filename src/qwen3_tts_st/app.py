@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 from contextlib import asynccontextmanager
+import io
 from pathlib import Path
 import tempfile
 from typing import Literal
+import wave
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -121,6 +123,12 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
             raise HTTPException(status_code=422, detail="reference_audio_base64 is invalid") from exc
         if len(audio) < 12 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
             raise HTTPException(status_code=422, detail="reference_audio must be WAV RIFF/WAVE")
+        try:
+            with wave.open(io.BytesIO(audio), "rb") as reference:
+                if reference.getnframes() <= 0 or reference.getframerate() <= 0:
+                    raise ValueError("empty WAV")
+        except (EOFError, ValueError, wave.Error) as exc:
+            raise HTTPException(status_code=422, detail="reference_audio is not a valid non-empty PCM WAV") from exc
         inbox = active_config.path("voices.library_dir", "voice_library") / "inbox"
         inbox.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=inbox, suffix=".wav", delete=False) as handle:
@@ -131,8 +139,10 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
                 source, request.profile_name, request.character_name, request.ref_text,
                 request.language, request.overwrite, app.state.tts.client,
             )
-        except (ValueError, FileExistsError, FileNotFoundError, RuntimeError, httpx.HTTPError) as exc:
+        except (ValueError, FileExistsError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (FileNotFoundError, RuntimeError, httpx.HTTPError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         finally:
             source.unlink(missing_ok=True)
         return {"voice_id": profile.voice_id, "validation": {"valid": True}, "metadata": profile.public()}
@@ -140,7 +150,10 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     @app.post("/admin/reload-voices")
     async def reload_voices():
         count = app.state.tts.library.reload()
-        registered = await app.state.tts.library.register_all(app.state.tts.client)
+        try:
+            registered = await app.state.tts.library.register_all(app.state.tts.client)
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=503, detail=f"qwentts registration failed: {exc}") from exc
         return {"status": "ok", "profile_count": count, "registered": registered}
 
     @app.get("/admin/runtime-settings")

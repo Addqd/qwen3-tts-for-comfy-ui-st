@@ -19,6 +19,7 @@ def load_nodes():
 
 
 def test_canonical_voice_lab_matches_current_node_schema():
+    assert [path.name for path in WORKFLOW_PATH.parent.glob("*.json")] == [WORKFLOW_PATH.name]
     module = load_nodes()
     workflow = json.loads(WORKFLOW_PATH.read_text(encoding="utf-8"))
     by_type = {node["type"]: node for node in workflow["nodes"]}
@@ -43,3 +44,18 @@ def test_active_node_inputs_are_real_qwentts_controls_only():
     assert names.isdisjoint({"active_model", "generation_preset", "multilingual_mode", "chunking_mode", "style", "clone_mode"})
     clone = module.QwenTTSCloneVoiceNode.INPUT_TYPES()["required"]
     assert list(clone)[-1] == "overwrite"
+
+
+def test_read_only_nodes_report_unavailable_backend(monkeypatch):
+    module = load_nodes()
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("backend down")
+
+    monkeypatch.setattr(module, "_json_request", unavailable)
+    server = {"endpoint": "http://127.0.0.1:8020", "timeout": 1}
+    assert module.QwenTTSVoiceSelectorNode().select(server, "clone:test")["result"][1].startswith("unavailable:")
+    assert module.QwenTTSModelsNode().list_models(server)["result"][0] == ""
+    health = module.QwenTTSHealthNode().check(server)["result"]
+    assert health[0] is False
+    assert health[1] == "unknown"

@@ -47,16 +47,46 @@ if ($LASTEXITCODE -ne 0 -or $HasHeavyBackend.Trim() -ne "False") { throw "A neur
 
 $PromptId = $null
 if (-not $SkipSynthesis) {
-    $Text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0J/RgNC+0LLQtdGA0LrQsCDQt9Cw0LLQtdGA0YjQtdC90LAuINCh0LjRgdGC0LXQvNCwINGA0LDQsdC+0YLQsNC10YIg0YHRgtCw0LHQuNC70YzQvdC+LCDQuCDQstGB0LUg0L3QsNGB0YLRgNC+0LnQutC4INGB0L7RhdGA0LDQvdC10L3Riy4="))
-    $Prompt = [ordered]@{
-        "1" = @{ class_type="QwenTTSServer"; inputs=@{ endpoint=$BackendUrl; timeout=$TimeoutSeconds; response_format="wav" } }
-        "2" = @{ class_type="QwenTTSSynthesize"; inputs=@{ server=@("1",0); text=$Text; voice="clone:test_ru_dima_neutral"; speed=1.0; response_format="wav"; russian_normalization="Use Backend Default" } }
-        "3" = @{ class_type="PreviewAudio"; inputs=@{ audio=@("2",0) } }
+    $ReferenceDir = Join-Path $script:ProjectRoot "voice_library\profiles\testrudima\neutral"
+    $ReferencePath = Join-Path $ReferenceDir "reference.wav"
+    $MetadataPath = Join-Path $ReferenceDir "metadata.json"
+    if (-not (Test-Path -LiteralPath $ReferencePath) -or -not (Test-Path -LiteralPath $MetadataPath)) {
+        throw "Local primary profile is required only for this real integration smoke: $ReferenceDir"
     }
-    $Response = Invoke-JsonPost -Uri "$ComfyUrl/prompt" -Payload @{ prompt=$Prompt }
-    $PromptId = [string]$Response.prompt_id
-    $Job = Wait-ComfyPrompt -PromptId $PromptId -Timeout $TimeoutSeconds
-    if ($Job.status.status_str -ne "success" -or @($Job.outputs.PSObject.Properties.Name) -notcontains "3") { throw "ComfyUI synthesis/PreviewAudio smoke failed." }
+    $ReferenceMetadata = Get-Content -Raw -LiteralPath $MetadataPath -Encoding UTF8 | ConvertFrom-Json
+    $SmokeId = "qwentts_comfy_smoke_$([Guid]::NewGuid().ToString('N'))"
+    $ComfyInput = Join-Path $Settings.install_path "ComfyUI\input"
+    $InputName = "$SmokeId.wav"
+    $InputPath = Join-Path $ComfyInput $InputName
+    $SmokeProfile = Join-Path $script:ProjectRoot "voice_library\profiles\$SmokeId"
+    New-Item -ItemType Directory -Force -Path $ComfyInput | Out-Null
+    Copy-Item -LiteralPath $ReferencePath -Destination $InputPath
+    try {
+        $Text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("0J/RgNC+0LLQtdGA0LrQsCDQt9Cw0LLQtdGA0YjQtdC90LAuINCh0LjRgdGC0LXQvNCwINGA0LDQsdC+0YLQsNC10YIg0YHRgtCw0LHQuNC70YzQvdC+LCDQuCDQstGB0LUg0L3QsNGB0YLRgNC+0LnQutC4INGB0L7RhdGA0LDQvdC10L3Riy4="))
+        $Prompt = [ordered]@{
+            "1" = @{ class_type="QwenTTSServer"; inputs=@{ endpoint=$BackendUrl; timeout=$TimeoutSeconds; response_format="wav" } }
+            "2" = @{ class_type="QwenTTSRuntimeSettings"; inputs=@{ server=@("1",0); apply_and_save=$false; language="Russian"; russian_normalization="Full Russian"; seed=-1; max_new_tokens=4096; temperature=0.75; top_k=40; top_p=0.9; repetition_penalty=1.05; pronunciation_defaults="" } }
+            "3" = @{ class_type="LoadAudio"; inputs=@{ audio=$InputName } }
+            "4" = @{ class_type="QwenTTSCloneVoice"; inputs=@{ server=@("2",0); reference_audio=@("3",0); ref_text=[string]$ReferenceMetadata.ref_text; profile_name=$SmokeId; character_name="Integration Smoke"; language="Russian"; overwrite=$false } }
+            "5" = @{ class_type="QwenTTSSynthesize"; inputs=@{ server=@("2",0); text=$Text; voice=@("4",0); speed=1.0; response_format="wav"; russian_normalization="Use Backend Default" } }
+            "6" = @{ class_type="PreviewAudio"; inputs=@{ audio=@("5",0) } }
+        }
+        $Response = Invoke-JsonPost -Uri "$ComfyUrl/prompt" -Payload @{ prompt=$Prompt }
+        $PromptId = [string]$Response.prompt_id
+        $Job = Wait-ComfyPrompt -PromptId $PromptId -Timeout $TimeoutSeconds
+        if ($Job.status.status_str -ne "success" -or @($Job.outputs.PSObject.Properties.Name) -notcontains "6") { throw "Canonical ComfyUI clone/synthesis/PreviewAudio smoke failed." }
+    } finally {
+        Remove-Item -LiteralPath $InputPath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $SmokeProfile) {
+            $ResolvedProfiles = [IO.Path]::GetFullPath((Join-Path $script:ProjectRoot "voice_library\profiles")).TrimEnd([char[]]"\/")
+            $ResolvedSmoke = [IO.Path]::GetFullPath($SmokeProfile)
+            if (-not $ResolvedSmoke.StartsWith($ResolvedProfiles + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+                (Split-Path -Leaf $ResolvedSmoke) -notlike "qwentts_comfy_smoke_*") {
+                throw "Refusing unsafe integration-smoke cleanup path: $ResolvedSmoke"
+            }
+            Remove-Item -LiteralPath $ResolvedSmoke -Recurse -Force
+        }
+    }
 }
 
 $Queue = Invoke-RestMethod -Uri "$ComfyUrl/queue" -TimeoutSec 15
@@ -68,6 +98,7 @@ if (@($Queue.queue_running).Count -or @($Queue.queue_pending).Count) { throw "Co
     registered_nodes=$ExpectedNodes
     canonical_workflow=(Split-Path -Leaf $WorkflowPath)
     workflow_schema=$Workflow.extra.qwen_tts_workflow_schema
+    canonical_full_graph=(-not [bool]$SkipSynthesis)
     heavy_backend_in_comfyui_python=[bool]::Parse($HasHeavyBackend.Trim())
     synthesis_skipped=[bool]$SkipSynthesis
     synthesis_prompt_id=$PromptId

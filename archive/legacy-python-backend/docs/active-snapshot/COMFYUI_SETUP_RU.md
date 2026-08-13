@@ -1,5 +1,7 @@
 # ComfyUI и Qwen3-TTS: подробная инструкция
 
+> **Исторический документ.** Команды относятся только к отдельному checkout legacy commit `cc1d638a898784fcecb528ec95f7669507138cc2`. Не запускайте их из корня активного проекта: одноимённые root scripts теперь управляют qwentts.cpp.
+
 Проверено 6 августа 2026 года на официальной ComfyUI Windows Portable NVIDIA `0.30.0`. Локальная установка находится в подпапке проекта `ComfyUI_windows_portable`, интерфейс открывается только на `http://127.0.0.1:8188`, TTS backend — на `http://127.0.0.1:8020`. Путь в конфигурации относительный, поэтому на этом компьютере весь `qwen3-tts-st` можно перемещать как одну папку. На другом компьютере backend `.venv` может потребовать пересоздания под доступный Python; ComfyUI embedded Python от него не зависит.
 
 ## Что здесь работает
@@ -24,18 +26,18 @@ Qwen-модель не загружается в ComfyUI. Ноды катего�
 
 ```powershell
 # Оба сервиса; ComfyUI запускается скрыто и пишет лог
-.\scripts\start-tts-and-comfyui.ps1
+<legacy-checkout>\scripts\start-tts-and-comfyui.ps1
 
 # То же, но с видимой консолью ComfyUI
-.\scripts\start-tts-and-comfyui.ps1 -VisibleComfyUIConsole
+<legacy-checkout>\scripts\start-tts-and-comfyui.ps1 -VisibleComfyUIConsole
 
 # Только ComfyUI; Manager включён из config.local.yaml
-.\scripts\start-comfyui.ps1
+<legacy-checkout>\scripts\start-comfyui.ps1
 
-.\status.ps1
-.\scripts\status-comfyui.ps1
-.\scripts\stop-comfyui.ps1
-.\stop.ps1
+<legacy-checkout>\status.ps1
+<legacy-checkout>\scripts\status-comfyui.ps1
+<legacy-checkout>\scripts\stop-comfyui.ps1
+<legacy-checkout>\stop.ps1
 ```
 
 Самый простой вариант — дважды щёлкнуть `start-tts-and-comfyui.bat` в Проводнике. BAT переходит в каталог проекта, запускает тот же `scripts\start-tts-and-comfyui.ps1` и показывает отдельную консоль ComfyUI. Скрытый session watcher сверяет PID, время старта и полный путь исполняемого файла каждого процесса. Закрытие BAT-окна, закрытие консоли ComfyUI или аварийное завершение backend останавливает **оба** подтверждённых проектных процесса и очищает runtime-файлы. Если ComfyUI из проектной `ComfyUI_windows_portable` уже слушает `127.0.0.1:8188`, launcher восстанавливает её PID после точной проверки пути; чужой listener он не принимает под управление и не завершает. Системная Execution Policy не изменяется.
@@ -101,16 +103,16 @@ Manager 4.2.2 установлен официальной командой из 
 На этой машине использовано безопасное копирование: junction был заблокирован средой. Перед изменением всегда проверяйте `-WhatIf`:
 
 ```powershell
-.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable" -Mode Copy -WhatIf
-.\scripts\install-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable" -Mode Copy -ReplaceExisting
-.\scripts\test-comfyui-integration.ps1 -SkipSynthesis
+<legacy-checkout>\scripts\install-comfyui-nodes.ps1 -ComfyUIPath "<legacy-checkout>\ComfyUI_windows_portable" -Mode Copy -WhatIf
+<legacy-checkout>\scripts\install-comfyui-nodes.ps1 -ComfyUIPath "<legacy-checkout>\ComfyUI_windows_portable" -Mode Copy -ReplaceExisting
+<legacy-checkout>\scripts\test-comfyui-integration.ps1 -SkipSynthesis
 ```
 
 При `-ReplaceExisting` старая копия перемещается в `ComfyUI\.qwen_tts_api_nodes-backups`, то есть вне сканируемого `custom_nodes`. Uninstall удаляет только цель, подтверждённую marker-файлом:
 
 ```powershell
-.\scripts\uninstall-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable" -WhatIf
-.\scripts\uninstall-comfyui-nodes.ps1 -ComfyUIPath ".\ComfyUI_windows_portable"
+<legacy-checkout>\scripts\uninstall-comfyui-nodes.ps1 -ComfyUIPath "<legacy-checkout>\ComfyUI_windows_portable" -WhatIf
+<legacy-checkout>\scripts\uninstall-comfyui-nodes.ps1 -ComfyUIPath "<legacy-checkout>\ComfyUI_windows_portable"
 ```
 
 ## Безопасное обновление ComfyUI

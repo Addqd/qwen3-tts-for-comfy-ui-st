@@ -37,7 +37,10 @@ def apply_pronunciation(text: str, dictionary: Mapping[str, str]) -> tuple[str, 
     result = text
     count = 0
     for source in sorted(dictionary, key=len, reverse=True):
-        result, changed = re.subn(re.escape(source), dictionary[source], result, flags=re.I)
+        replacement = dictionary[source]
+        result, changed = re.subn(
+            re.escape(source), lambda _match, literal=replacement: literal, result, flags=re.I
+        )
         count += changed
     return result, count
 

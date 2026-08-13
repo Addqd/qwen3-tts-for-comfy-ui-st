@@ -1,5 +1,7 @@
 # Производительность и совместимость
 
+> **Исторический документ.** Legacy benchmark-команды разрешено запускать только после восстановления commit `cc1d638a898784fcecb528ec95f7669507138cc2` в отдельный checkout, не из активного корня qwentts.cpp.
+
 ## 2026-08-09 — request-level 1.7B и переключение моделей
 
 - `Qwen/Qwen3-TTS-12Hz-1.7B-Base` впервые скачана в project-local `model_cache`; фактический cache footprint после загрузки — 4,23 GB.
@@ -30,11 +32,11 @@ CPU/CUDA WAV проверены `ffprobe`/soundfile: PCM s16le, mono, 24 кГц,
 Повторение:
 
 ```powershell
-.\scripts\benchmark-baseline.ps1
-.\scripts\benchmark-tts-cpu.ps1
-.\scripts\benchmark-tts-gpu.ps1       # экспериментально, может ждать до timeout
-.\scripts\benchmark-tts-on-demand.ps1 # экспериментально
-.\scripts\benchmark-coexistence.ps1
+<legacy-checkout>\scripts\benchmark-baseline.ps1
+<legacy-checkout>\scripts\benchmark-tts-cpu.ps1
+<legacy-checkout>\scripts\benchmark-tts-gpu.ps1       # экспериментально, может ждать до timeout
+<legacy-checkout>\scripts\benchmark-tts-on-demand.ps1 # экспериментально
+<legacy-checkout>\scripts\benchmark-coexistence.ps1
 ```
 
 Не запускайте GPU benchmark при малом запасе VRAM. `auto` полезен как policy engine, но не знает измеренную скорость конкретной версии. Текущий локальный `config.local.yaml` задаёт `auto`; при необходимости предсказуемого CPU-запуска используйте `config/config.cpu.yaml`.

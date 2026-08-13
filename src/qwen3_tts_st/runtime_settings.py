@@ -21,15 +21,18 @@ class RuntimeSettingsStore:
             "top_p": float(config.get("runtime_defaults.top_p", 0.9)),
             "repetition_penalty": float(config.get("runtime_defaults.repetition_penalty", 1.05)),
         }
-        loaded = {}
+        loaded: dict[str, Any] = {}
         if self.path.exists():
             try:
                 candidate = json.loads(self.path.read_text(encoding="utf-8-sig"))
                 if isinstance(candidate, dict):
                     loaded = {key: candidate[key] for key in self.defaults if key in candidate}
-            except (OSError, json.JSONDecodeError):
+                self._settings = self._validate({**self.defaults, **loaded})
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
                 loaded = {}
-        self._settings = self._validate({**self.defaults, **loaded})
+                self._settings = self._validate(self.defaults)
+        else:
+            self._settings = self._validate(self.defaults)
 
     def _validate(self, value: dict[str, Any]) -> dict[str, Any]:
         result = dict(value)

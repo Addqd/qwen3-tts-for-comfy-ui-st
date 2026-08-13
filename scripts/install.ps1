@@ -20,14 +20,23 @@ try {
         if ($Command -and $Command.Source -notmatch "WindowsApps") { $Python = $Command.Source }
     }
     if (-not $Python -or -not (Test-Path -LiteralPath $Python)) { throw "Python 3.12 was not found." }
-    if ((& $Python --version 2>&1) -notmatch "Python 3\.12\.") { throw "Python 3.12 is required." }
+    $VersionOutput = & $Python --version 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Unable to run the selected Python interpreter (exit $LASTEXITCODE)." }
+    if ($VersionOutput -notmatch "Python 3\.12\.") { throw "Python 3.12 is required." }
     $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-    if (-not (Test-Path -LiteralPath $VenvPython)) { & $Python -m venv (Join-Path $ProjectRoot ".venv") }
+    if (-not (Test-Path -LiteralPath $VenvPython)) {
+        & $Python -m venv (Join-Path $ProjectRoot ".venv")
+        if ($LASTEXITCODE -ne 0) { throw "Virtual environment creation failed (exit $LASTEXITCODE)." }
+    }
     & $VenvPython -m pip install "uv==0.12.2"
+    if ($LASTEXITCODE -ne 0) { throw "uv installation failed (exit $LASTEXITCODE)." }
     $env:UV_CACHE_DIR = Join-Path $ProjectRoot ".cache\uv"
     & $VenvPython -m uv pip install --python $VenvPython -e "$ProjectRoot[test]"
+    if ($LASTEXITCODE -ne 0) { throw "Project dependency installation failed (exit $LASTEXITCODE)." }
     & $VenvPython -m uv pip check
+    if ($LASTEXITCODE -ne 0) { throw "Installed dependency validation failed (exit $LASTEXITCODE)." }
     & $VenvPython -c "import fastapi,httpx,pydantic,yaml; import qwen3_tts_st; print('Lightweight facade imports OK')"
+    if ($LASTEXITCODE -ne 0) { throw "Lightweight facade import check failed (exit $LASTEXITCODE)." }
     if (-not $SkipRuntimeCheck) { & (Join-Path $PSScriptRoot "verify-qwentts-runtime.ps1") | Format-List }
     Write-Host "Installation completed. Log: $LogPath"
 } finally {

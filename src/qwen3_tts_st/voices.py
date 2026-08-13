@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -66,6 +68,7 @@ class VoiceLibrary:
         self.config = config
         self.profiles_root.mkdir(parents=True, exist_ok=True)
         self.profiles: dict[str, VoiceProfile] = {}
+        self._create_lock = asyncio.Lock()
         self.reload()
 
     def reload(self) -> int:
@@ -155,35 +158,78 @@ class VoiceLibrary:
         overwrite: bool,
         client: httpx.AsyncClient,
     ) -> VoiceProfile:
-        if language != "Russian":
-            raise ValueError("The active production server is configured for Russian")
-        if not ref_text.strip():
-            raise ValueError("Exact ref_text is required for ICL cloning")
-        safe = _safe_name(profile_name)
-        target = self.profiles_root / safe
-        if target.exists() and any(target.iterdir()):
-            if not overwrite:
+        async with self._create_lock:
+            if language != "Russian":
+                raise ValueError("The active production server is configured for Russian")
+            if not ref_text.strip():
+                raise ValueError("Exact ref_text is required for ICL cloning")
+            safe = _safe_name(profile_name)
+            target = self.profiles_root / safe
+            target_populated = target.exists() and any(target.iterdir())
+            if target_populated and not overwrite:
                 raise FileExistsError(f"Profile already exists: {profile_name}")
-            backup = self.backups_root / f"{safe}-{datetime.now():%Y%m%d-%H%M%S-%f}"
-            backup.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(target, backup)
-        target.mkdir(parents=True, exist_ok=True)
-        reference = target / "reference.wav"
-        shutil.copy2(source, reference)
-        self._encode(reference)
-        metadata = {
-            "schema": 2,
-            "profile_id": profile_name,
-            "display_name": profile_name,
-            "character": character_name,
-            "reference_audio": "reference.wav",
-            "ref_text": ref_text.strip(),
-            "language": language,
-            "engine": "qwentts.cpp",
-            "voice_assets": {"spk": "reference.spk", "rvq": "reference.rvq"},
-        }
-        (target / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        self.reload()
-        profile = self.resolve(f"clone:{profile_name}")
-        await self.register(profile, client)
-        return profile
+
+            previous = next(
+                (profile for profile in set(self.profiles.values()) if profile.directory == target and profile.ready),
+                None,
+            )
+            staging = Path(tempfile.mkdtemp(prefix=f".{safe}-staging-", dir=self.profiles_root))
+            backup: Path | None = None
+            try:
+                reference = staging / "reference.wav"
+                shutil.copy2(source, reference)
+                await asyncio.to_thread(self._encode, reference)
+                metadata = {
+                    "schema": 2,
+                    "profile_id": profile_name,
+                    "display_name": profile_name,
+                    "character": character_name,
+                    "reference_audio": "reference.wav",
+                    "ref_text": ref_text.strip(),
+                    "language": language,
+                    "engine": "qwentts.cpp",
+                    "voice_assets": {"spk": "reference.spk", "rvq": "reference.rvq"},
+                }
+                (staging / "metadata.json").write_text(
+                    json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+                if target.exists():
+                    backup = self.backups_root / f"{safe}-{datetime.now():%Y%m%d-%H%M%S-%f}"
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    target.replace(backup)
+                try:
+                    staging.replace(target)
+                except Exception:
+                    if backup is not None and backup.exists() and not target.exists():
+                        backup.replace(target)
+                    raise
+
+                try:
+                    self.reload()
+                    replacement = self.resolve(f"clone:{profile_name}")
+                    await self.register(replacement, client)
+                except Exception as registration_error:
+                    failed = self.profiles_root / f".{safe}-failed-{datetime.now():%Y%m%d-%H%M%S-%f}"
+                    target.replace(failed)
+                    if backup is not None:
+                        backup.replace(target)
+                    shutil.rmtree(failed, ignore_errors=True)
+                    self.reload()
+                    rollback_error = None
+                    if previous is not None:
+                        try:
+                            restored = self.resolve(previous.profile_id)
+                            await self.register(restored, client)
+                        except Exception as exc:  # preserve the original registration failure
+                            rollback_error = exc
+                    if rollback_error is not None:
+                        raise RuntimeError(
+                            f"Replacement registration failed and runtime rollback failed: {rollback_error}"
+                        ) from registration_error
+                    raise
+                return replacement
+            finally:
+                if staging.exists():
+                    shutil.rmtree(staging, ignore_errors=True)

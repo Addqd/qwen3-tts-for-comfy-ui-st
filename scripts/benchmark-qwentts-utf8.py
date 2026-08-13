@@ -79,7 +79,6 @@ def main() -> int:
                 {
                     "sample": name,
                     "input_utf8_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
-                    "text": source_text,
                     "wall_seconds": round(elapsed, 3),
                     "audio_seconds": round(duration, 3),
                     "rtf": round(elapsed / duration, 3),

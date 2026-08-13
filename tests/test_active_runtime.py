@@ -43,11 +43,24 @@ def test_legacy_runtime_settings_are_migrated_to_real_qwentts_controls(tmp_path)
     assert "active_model" not in settings
 
 
-def test_existing_primary_profile_uses_persisted_qwentts_assets():
+def test_synthetic_profile_uses_persisted_qwentts_assets(tmp_path):
     config = load_config(ROOT / "config" / "config.example.yaml")
-    library = VoiceLibrary(ROOT / "voice_library", config)
-    profile = library.resolve("clone:test_ru_dima_neutral")
-    assert profile.voice_id == "clone:test_ru_dima_neutral"
+    profile_dir = tmp_path / "profiles" / "synthetic"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "reference.wav").write_bytes(b"RIFFsyntheticWAVE")
+    (profile_dir / "reference.spk").write_bytes(b"s" * 8192)
+    (profile_dir / "reference.rvq").write_bytes(b"r" * 32)
+    (profile_dir / "metadata.json").write_text(json.dumps({
+        "profile_id": "synthetic",
+        "display_name": "synthetic",
+        "character": "Synthetic",
+        "reference_audio": "reference.wav",
+        "ref_text": "Синтетический тестовый профиль.",
+        "language": "Russian",
+    }, ensure_ascii=False), encoding="utf-8")
+    library = VoiceLibrary(tmp_path, config)
+    profile = library.resolve("clone:synthetic")
+    assert profile.voice_id == "clone:synthetic"
     assert profile.spk_path.stat().st_size == 8192
     assert profile.rvq_path.stat().st_size > 0
     public = profile.public()

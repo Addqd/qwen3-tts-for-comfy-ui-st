@@ -1,5 +1,7 @@
 # Русские reference WAV, эмоциональные профили и ComfyUI
 
+> **Исторический документ.** Этот router отсутствует в active runtime. Команды разрешено использовать только в отдельном checkout legacy commit `cc1d638a898784fcecb528ec95f7669507138cc2`.
+
 Дата фактической проверки: 2026-08-06. Это руководство относится к текущему checkout и установленной внутри проекта ComfyUI Portable 0.30.0.
 
 ## Что подготовлено
@@ -92,7 +94,7 @@ clone:test_ru_dima_tense
 Из PowerShell:
 
 ```powershell
-.\scripts\start-tts-and-comfyui.ps1
+<legacy-checkout>\scripts\start-tts-and-comfyui.ps1
 ```
 
 Проверочные URL:
