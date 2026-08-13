@@ -1,5 +1,10 @@
 [CmdletBinding()]
-param([string]$Config = "config/config.local.yaml", [switch]$SkipSynthesis, [int]$TimeoutSeconds = 900)
+param(
+    [string]$Config = "config/config.local.yaml",
+    [switch]$SkipSynthesis,
+    [switch]$AllowComfyUIInputWrite,
+    [int]$TimeoutSeconds = 900
+)
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "comfyui-common.ps1")
@@ -47,6 +52,9 @@ if ($LASTEXITCODE -ne 0 -or $HasHeavyBackend.Trim() -ne "False") { throw "A neur
 
 $PromptId = $null
 if (-not $SkipSynthesis) {
+    if (-not $AllowComfyUIInputWrite) {
+        throw "Real synthesis writes a temporary WAV to ComfyUI input. Re-run with -AllowComfyUIInputWrite to confirm, or use -SkipSynthesis."
+    }
     $ReferenceDir = Join-Path $script:ProjectRoot "voice_library\profiles\testrudima\neutral"
     $ReferencePath = Join-Path $ReferenceDir "reference.wav"
     $MetadataPath = Join-Path $ReferenceDir "metadata.json"

@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import threading
 
 import pytest
@@ -133,6 +134,32 @@ def test_conversion_and_literal_replacement_guards(monkeypatch):
     monkeypatch.setattr("qwen3_tts_st.service.subprocess.run", missing)
     with pytest.raises(RuntimeError, match="FFmpeg.*not found"):
         TTSService._convert(b"wav", "mp3", 1)
+
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired("ffmpeg", 120)
+
+    monkeypatch.setattr("qwen3_tts_st.service.subprocess.run", timeout)
+    with pytest.raises(RuntimeError, match="FFmpeg conversion timed out"):
+        TTSService._convert(b"wav", "mp3", 1)
+
+
+@pytest.mark.asyncio
+async def test_voice_registration_reports_filesystem_rollback_failure(tmp_path, monkeypatch):
+    target = write_profile(tmp_path)
+    source = tmp_path / "new.wav"
+    source.write_bytes(b"new-wav")
+    library = VoiceLibrary(tmp_path, load_config(ROOT / "config" / "config.example.yaml"))
+    monkeypatch.setattr(library, "_encode", fake_encode)
+    original_replace = Path.replace
+
+    def fail_failed_move(path: Path, destination: Path):
+        if path == target and destination.name.startswith(".voice-failed-"):
+            raise OSError("rollback move failed")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", fail_failed_move)
+    with pytest.raises(RuntimeError, match="registration failed and runtime rollback failed: rollback move failed"):
+        await library.create(source, "voice", "Voice", "new", "Russian", True, RecordingClient(fail_ref_text="new"))
 
 
 def test_invalid_persisted_runtime_settings_fall_back_to_defaults(tmp_path):

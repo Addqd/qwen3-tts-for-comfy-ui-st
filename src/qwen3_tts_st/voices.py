@@ -212,13 +212,16 @@ class VoiceLibrary:
                     await self.register(replacement, client)
                 except Exception as registration_error:
                     failed = self.profiles_root / f".{safe}-failed-{datetime.now():%Y%m%d-%H%M%S-%f}"
-                    target.replace(failed)
-                    if backup is not None:
-                        backup.replace(target)
-                    shutil.rmtree(failed, ignore_errors=True)
-                    self.reload()
                     rollback_error = None
-                    if previous is not None:
+                    try:
+                        target.replace(failed)
+                        if backup is not None:
+                            backup.replace(target)
+                        shutil.rmtree(failed, ignore_errors=True)
+                    except OSError as exc:
+                        rollback_error = exc
+                    self.reload()
+                    if rollback_error is None and previous is not None:
                         try:
                             restored = self.resolve(previous.profile_id)
                             await self.register(restored, client)

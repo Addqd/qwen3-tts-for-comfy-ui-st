@@ -59,3 +59,16 @@ def test_read_only_nodes_report_unavailable_backend(monkeypatch):
     health = module.QwenTTSHealthNode().check(server)["result"]
     assert health[0] is False
     assert health[1] == "unknown"
+
+
+def test_comfyui_smoke_requires_explicit_input_write_opt_in():
+    script = (ROOT / "scripts" / "test-comfyui-integration.ps1").read_text(encoding="utf-8-sig")
+    assert "[switch]$AllowComfyUIInputWrite" in script
+    assert "if (-not $AllowComfyUIInputWrite)" in script
+
+
+def test_managed_workflow_marker_rejects_empty_target_before_path_resolution():
+    script = (ROOT / "scripts" / "comfyui-common.ps1").read_text(encoding="utf-8-sig")
+    empty_guard = script.index("[string]::IsNullOrWhiteSpace([string]$Info.target)")
+    path_resolution = script.index("[IO.Path]::GetFullPath([string]$Info.target)")
+    assert empty_guard < path_resolution

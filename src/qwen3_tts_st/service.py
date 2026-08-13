@@ -125,6 +125,8 @@ class TTSService:
                 result = subprocess.run(command, capture_output=True, timeout=120, check=False)
             except FileNotFoundError as exc:
                 raise RuntimeError("FFmpeg is required for format or speed conversion but was not found in PATH") from exc
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("FFmpeg conversion timed out") from exc
             if result.returncode != 0:
                 raise RuntimeError(f"FFmpeg conversion failed: {result.stderr.decode(errors='replace')[-1000:]}")
             if not output.exists():

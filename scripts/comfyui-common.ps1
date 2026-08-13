@@ -81,6 +81,9 @@ function Sync-QwenTTSManagedWorkflow {
         throw "Managed workflow marker is unreadable; no workflow was changed."
     }
     $ExpectedTarget = [IO.Path]::GetFullPath($Target)
+    if ([string]::IsNullOrWhiteSpace([string]$Info.target)) {
+        throw "Managed workflow marker failed its safety checks; no workflow was changed."
+    }
     $MarkedTarget = [IO.Path]::GetFullPath([string]$Info.target)
     if ([string]$Info.workflow -ne "voice_profile_from_wav_ru.json" -or
         -not $MarkedTarget.Equals($ExpectedTarget, [StringComparison]::OrdinalIgnoreCase)) {
