@@ -25,15 +25,14 @@ class VoiceProfile:
     ref_text: str
     language: str
     directory: Path
-    model_variant: str
 
     @property
     def spk_path(self) -> Path:
-        return self.directory / "variants" / self.model_variant / "reference.spk"
+        return self.directory / "variants" / "bf16" / "reference.spk"
 
     @property
     def rvq_path(self) -> Path:
-        return self.directory / "variants" / self.model_variant / "reference.rvq"
+        return self.directory / "variants" / "bf16" / "reference.rvq"
 
     @property
     def ready(self) -> bool:
@@ -46,7 +45,6 @@ class VoiceProfile:
             "display_name": self.display_name,
             "character": self.character,
             "language": self.language,
-            "model_variant": self.model_variant,
             "ref_text": self.ref_text,
             "reference_available": self.reference_path.exists(),
             "spk_available": self.spk_path.exists(),
@@ -68,7 +66,7 @@ class VoiceLibrary:
         self.profiles_root = root / "profiles"
         self.backups_root = root / "backups"
         self.config = config
-        self.model_variant, self.talker_model, self.codec_model = config.qwentts_model()
+        self.talker_model, self.codec_model = config.qwentts_models()
         self.profiles_root.mkdir(parents=True, exist_ok=True)
         self.profiles: dict[str, VoiceProfile] = {}
         self._create_lock = asyncio.Lock()
@@ -90,10 +88,7 @@ class VoiceLibrary:
                     ref_text=str(data.get("ref_text", "")).strip(),
                     language=str(data.get("language", "Russian")),
                     directory=path.parent,
-                    model_variant=self.model_variant,
                 )
-                if self._migrate_legacy_q8_assets(profile.directory):
-                    self._record_variant(profile.directory, "q8")
                 for key in (profile.voice_id, profile.profile_id, profile.display_name):
                     found[key.lower()] = profile
             except (OSError, KeyError, ValueError, json.JSONDecodeError):
@@ -115,20 +110,6 @@ class VoiceLibrary:
         return profile
 
     @staticmethod
-    def _migrate_legacy_q8_assets(directory: Path) -> bool:
-        legacy_spk = directory / "reference.spk"
-        legacy_rvq = directory / "reference.rvq"
-        q8 = directory / "variants" / "q8"
-        if legacy_spk.exists() and legacy_rvq.exists() and not (q8 / "reference.spk").exists() and not (q8 / "reference.rvq").exists():
-            q8.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(legacy_spk, q8 / "reference.spk")
-            shutil.copy2(legacy_rvq, q8 / "reference.rvq")
-            legacy_spk.unlink()
-            legacy_rvq.unlink()
-            return True
-        return False
-
-    @staticmethod
     def _record_variant(directory: Path, variant: str) -> None:
         metadata_path = directory / "metadata.json"
         metadata = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
@@ -146,9 +127,9 @@ class VoiceLibrary:
         executable = self.config.path("qwentts.codec_executable", "runtime/qwentts/bin/qwen-codec.exe")
         for required in (executable, self.talker_model, self.codec_model):
             if not required.exists():
-                raise FileNotFoundError(f"Required qwentts {self.model_variant} file is missing: {required}")
+                raise FileNotFoundError(f"Required qwentts BF16 file is missing: {required}")
         variant_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=f"qwentts-{self.model_variant}-", dir=reference.parent) as folder:
+        with tempfile.TemporaryDirectory(prefix="qwentts-bf16-", dir=reference.parent) as folder:
             working = Path(folder) / "reference.wav"
             shutil.copy2(reference, working)
             result = subprocess.run(
@@ -171,7 +152,7 @@ class VoiceLibrary:
     async def _prepare(self, profile: VoiceProfile) -> VoiceProfile:
         if not profile.ready and profile.reference_path.exists() and profile.ref_text:
             await asyncio.to_thread(self._encode, profile.reference_path, profile.spk_path.parent)
-            self._record_variant(profile.directory, self.model_variant)
+            self._record_variant(profile.directory, "bf16")
         return profile
 
     @staticmethod
@@ -223,7 +204,7 @@ class VoiceLibrary:
             try:
                 reference = staging / "reference.wav"
                 shutil.copy2(source, reference)
-                variant_dir = staging / "variants" / self.model_variant
+                variant_dir = staging / "variants" / "bf16"
                 await asyncio.to_thread(self._encode, reference, variant_dir)
                 metadata = {
                     "schema": 2,
@@ -235,7 +216,7 @@ class VoiceLibrary:
                     "language": language,
                     "engine": "qwentts.cpp",
                     "voice_assets": {
-                        "variants": {self.model_variant: {"spk": f"variants/{self.model_variant}/reference.spk", "rvq": f"variants/{self.model_variant}/reference.rvq"}},
+                        "variants": {"bf16": {"spk": "variants/bf16/reference.spk", "rvq": "variants/bf16/reference.rvq"}},
                     },
                 }
                 (staging / "metadata.json").write_text(

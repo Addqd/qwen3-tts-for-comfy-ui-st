@@ -1,8 +1,10 @@
 [CmdletBinding()]
-param([string]$Config = "config/config.local.yaml", [int]$WaitSeconds = 90)
+param([string]$Config = "config/config.local.yaml", [int]$WaitSeconds = 90, [switch]$NoSessionSupervisor)
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
+$script:ProjectRoot = $ProjectRoot
+. (Join-Path $ProjectRoot "scripts\session-common.ps1")
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $ConfigPath = if ([IO.Path]::IsPathRooted($Config)) { $Config } else { Join-Path $ProjectRoot $Config }
 $Runtime = Join-Path $ProjectRoot "runtime"
@@ -16,15 +18,17 @@ if (Test-Path -LiteralPath $StatePath) {
     $Existing = Get-Content -Raw -LiteralPath $StatePath -Encoding UTF8 | ConvertFrom-Json
     if (Get-Process -Id ([int]$Existing.facade.pid) -ErrorAction SilentlyContinue) { throw "Backend is already running, PID $($Existing.facade.pid)" }
 }
-& (Join-Path $ProjectRoot "scripts\ensure-qwentts-models.ps1") -Config $ConfigPath
-& (Join-Path $ProjectRoot "scripts\verify-qwentts-runtime.ps1") -Config $ConfigPath | Out-Null
-$ConfigJson = & $Python -c "from qwen3_tts_st.config import load_config; import json,sys; c=load_config(sys.argv[1]); variant,talker,codec=c.qwentts_model(); print(json.dumps({'public':int(c.get('server.port',8020)),'engine':int(c.get('qwentts.port',8030)),'variant':variant,'talker':talker.name,'codec':codec.name}))" $ConfigPath | ConvertFrom-Json
+& (Join-Path $ProjectRoot "scripts\ensure-qwentts-models.ps1")
+& (Join-Path $ProjectRoot "scripts\verify-qwentts-runtime.ps1") | Out-Null
+$ConfigJson = & $Python -c "from qwen3_tts_st.config import load_config; import json,sys; c=load_config(sys.argv[1]); talker,codec=c.qwentts_models(); print(json.dumps({'public':int(c.get('server.port',8020)),'engine':int(c.get('qwentts.port',8030)),'talker':talker.name,'codec':codec.name}))" $ConfigPath | ConvertFrom-Json
 foreach ($Port in @([int]$ConfigJson.public,[int]$ConfigJson.engine)) {
     $Listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
     if ($Listener) { throw "Port $Port is already used by PID $($Listener.OwningProcess -join ',')" }
 }
 
 $RunnerScript = Join-Path $ProjectRoot "scripts\qwentts-runner.py"
+$PreviousInternal = $env:QWEN3_TTS_SESSION_INTERNAL
+$env:QWEN3_TTS_SESSION_INTERNAL = "1"
 $Runner = Start-Process -FilePath $Python -ArgumentList @($RunnerScript,"--config",$ConfigPath) -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
 try {
     $EngineDeadline = (Get-Date).AddSeconds($WaitSeconds)
@@ -49,6 +53,7 @@ try {
     $QwenState | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $QwenStatePath -Encoding UTF8
 
     $Facade = Start-Process -FilePath $Python -ArgumentList @("-m","qwen3_tts_st.cli","--config",$ConfigPath) -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
+    if ($null -eq $PreviousInternal) { Remove-Item Env:QWEN3_TTS_SESSION_INTERNAL -ErrorAction SilentlyContinue } else { $env:QWEN3_TTS_SESSION_INTERNAL = $PreviousInternal }
     $PublicUrl = "http://127.0.0.1:$($ConfigJson.public)"
     $FacadeDeadline = (Get-Date).AddSeconds($WaitSeconds)
     do {
@@ -65,10 +70,19 @@ try {
         config = [IO.Path]::GetFullPath($ConfigPath)
     }
     $State | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StatePath -Encoding UTF8
+    if (-not $NoSessionSupervisor) {
+        $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "backend launcher" -Components @(
+            @{ name = "facade"; pid = $Facade.Id },
+            @{ name = "qwentts runner"; pid = $Runner.Id },
+            @{ name = "qwentts.cpp"; pid = $Engine.Id }
+        )
+        Write-Host "Project session supervisor: PID $($SessionSupervisor.Id)"
+    }
     Write-Host "Qwen3-TTS facade: $PublicUrl"
     Write-Host "Engine: qwentts.cpp / CUDA0 / $($Health.model_variant) / $($Health.model_file) (PID $($Engine.Id))"
     Write-Host "Default voice: $($Health.default_voice)"
 } catch {
+    if ($null -eq $PreviousInternal) { Remove-Item Env:QWEN3_TTS_SESSION_INTERNAL -ErrorAction SilentlyContinue } else { $env:QWEN3_TTS_SESSION_INTERNAL = $PreviousInternal }
     if ($Facade -and -not $Facade.HasExited) { Stop-Process -Id $Facade.Id -ErrorAction SilentlyContinue }
     if ($Engine -and -not $Engine.HasExited) { Stop-Process -Id $Engine.Id -ErrorAction SilentlyContinue }
     if ($Runner -and -not $Runner.HasExited) { Stop-Process -Id $Runner.Id -ErrorAction SilentlyContinue }

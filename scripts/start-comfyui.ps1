@@ -3,11 +3,13 @@ param(
     [string]$Config = "config/config.local.yaml",
     [switch]$NoManager,
     [switch]$Hidden,
+    [switch]$NoSessionSupervisor,
     [int]$WaitSeconds = 0
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "comfyui-common.ps1")
+. (Join-Path $PSScriptRoot "session-common.ps1")
 $Settings = Get-ComfyUISettings -Config $Config
 if (-not $Settings.enabled) { throw "ComfyUI is disabled in configuration." }
 if ($Settings.host -ne "127.0.0.1") { throw "Only ComfyUI host 127.0.0.1 is allowed." }
@@ -26,6 +28,12 @@ if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
     if ($OldProcess) {
         if (Test-LocalHttp -Uri "$($OldState.url)/system_stats") {
             Assert-QwenTTSCloneVoiceSchema -Url ([string]$OldState.url)
+            if (-not $NoSessionSupervisor) {
+                $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "ComfyUI launcher" -Components @(
+                    @{ name = "ComfyUI"; pid = $OldProcess.Id }
+                )
+                Write-Host "Project session supervisor: PID $($SessionSupervisor.Id)"
+            }
             Write-Host "ComfyUI is already running: $($OldState.url) (PID $($OldState.pid))"
             return
         }
@@ -92,6 +100,11 @@ if (-not $Ready) {
 }
 try {
     Assert-QwenTTSCloneVoiceSchema -Url ([string]$State.url)
+    if (-not $NoSessionSupervisor) {
+        $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "ComfyUI launcher" -Components @(
+            @{ name = "ComfyUI"; pid = $Process.Id }
+        )
+    }
 } catch {
     $SchemaFailure = $_
     $Owned = Test-ComfyUIOwnedProcess -State $State
@@ -101,4 +114,5 @@ try {
 }
 Write-Host "ComfyUI: $($State.url)"
 Write-Host "PID: $($State.pid); Manager: $Manager; console visible: $(-not $Hidden)"
+if ($SessionSupervisor) { Write-Host "Project session supervisor: PID $($SessionSupervisor.Id)" }
 Write-Host "Log: $OutLog"

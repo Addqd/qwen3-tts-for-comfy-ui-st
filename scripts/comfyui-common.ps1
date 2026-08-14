@@ -2,11 +2,11 @@ $script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 $script:ComfyUIStatePath = Join-Path $script:ProjectRoot "runtime\comfyui.json"
 $script:QwenTTSRequiredSchemas = [ordered]@{
     QwenTTSServer = @("endpoint", "timeout", "response_format")
-    QwenTTSRuntimeSettings = @("server", "apply_and_save", "language", "russian_normalization", "seed", "max_new_tokens", "temperature", "top_k", "top_p", "repetition_penalty")
+    QwenTTSRuntimeSettings = @("server", "apply_and_save", "language", "russian_normalization", "auto_stress", "stress_format", "text_enhancement", "seed", "max_new_tokens", "temperature", "top_k", "top_p", "repetition_penalty")
     QwenTTSCloneVoice = @("server", "reference_audio", "ref_text", "profile_name", "character_name", "language", "overwrite")
     QwenTTSSynthesize = @("server", "text", "voice", "speed", "response_format", "russian_normalization")
 }
-$script:QwenTTSRemovedInputs = @("active_model", "generation_preset", "multilingual_mode", "chunking_mode", "style", "clone_mode")
+$script:QwenTTSRemovedInputs = @("active_model", "model_variant", "generation_preset", "multilingual_mode", "chunking_mode", "style", "clone_mode")
 
 function Get-ComfyUISettings {
     param([string]$Config = "config/config.local.yaml")

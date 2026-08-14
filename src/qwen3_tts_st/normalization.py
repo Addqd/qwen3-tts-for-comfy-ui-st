@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Mapping
+
+
+@dataclass(frozen=True)
+class PronunciationSpan:
+    text: str
+    replacement: str | None = None
 
 
 def parse_pronunciation_overrides(value: Any) -> dict[str, str]:
@@ -43,6 +50,26 @@ def apply_pronunciation(text: str, dictionary: Mapping[str, str]) -> tuple[str, 
         )
         count += changed
     return result, count
+
+
+def split_pronunciation_spans(text: str, dictionary: Mapping[str, str]) -> tuple[list[PronunciationSpan], int]:
+    if not dictionary:
+        return [PronunciationSpan(text)], 0
+    sources = sorted(dictionary, key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(source) for source in sources), re.I)
+    replacements = {source.casefold(): replacement for source, replacement in dictionary.items()}
+    spans: list[PronunciationSpan] = []
+    cursor = 0
+    count = 0
+    for match in pattern.finditer(text):
+        if match.start() > cursor:
+            spans.append(PronunciationSpan(text[cursor:match.start()]))
+        spans.append(PronunciationSpan(match.group(0), replacements[match.group(0).casefold()]))
+        cursor = match.end()
+        count += 1
+    if cursor < len(text):
+        spans.append(PronunciationSpan(text[cursor:]))
+    return spans or [PronunciationSpan(text)], count
 
 
 def normalize_russian_text(text: str, mode: str) -> str:

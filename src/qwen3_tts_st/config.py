@@ -27,7 +27,7 @@ class AppConfig:
         for key in ("server.host", "qwentts.host", "comfyui.host"):
             if str(self.get(key, "127.0.0.1")) != "127.0.0.1":
                 raise ValueError(f"Security: {key} must be exactly 127.0.0.1")
-        self.qwentts_model()
+        self.qwentts_models()
 
     def get(self, dotted: str, default: Any = None) -> Any:
         current: Any = self.data
@@ -41,39 +41,12 @@ class AppConfig:
         value = Path(str(self.get(dotted, default)))
         return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
 
-    def qwentts_model(self) -> tuple[str, Path, Path]:
-        variant = str(self.get("qwentts.active_model", "bf16")).strip().lower()
-        if variant not in {"bf16", "q8"}:
-            raise ValueError(f"Unknown qwentts.active_model: {variant}. Supported values: bf16, q8")
-        prefix = f"qwentts.models.{variant}"
-        talker = self.get(f"{prefix}.talker_model")
-        codec = self.get(f"{prefix}.codec_model")
+    def qwentts_models(self) -> tuple[Path, Path]:
+        talker = self.get("qwentts.talker_model")
+        codec = self.get("qwentts.codec_model")
         if not talker or not codec:
-            raise ValueError(f"qwentts model registry entry is incomplete: {variant}")
-        return variant, self.path(f"{prefix}.talker_model", ""), self.path(f"{prefix}.codec_model", "")
-
-    def configured_qwentts_variant(self) -> str:
-        override: dict[str, Any] = {}
-        if self.source.exists():
-            override = yaml.safe_load(self.source.read_text(encoding="utf-8")) or {}
-        variant = str(override.get("qwentts", {}).get("active_model", self.qwentts_model()[0])).strip().lower()
-        if variant not in {"bf16", "q8"}:
-            raise ValueError(f"Unknown qwentts.active_model: {variant}. Supported values: bf16, q8")
-        return variant
-
-    def persist_qwentts_variant(self, variant: str) -> str:
-        selected = variant.strip().lower()
-        if selected not in {"bf16", "q8"}:
-            raise ValueError(f"Unknown qwentts.active_model: {selected}. Supported values: bf16, q8")
-        override: dict[str, Any] = {}
-        if self.source.exists():
-            override = yaml.safe_load(self.source.read_text(encoding="utf-8")) or {}
-        override.setdefault("qwentts", {})["active_model"] = selected
-        self.source.parent.mkdir(parents=True, exist_ok=True)
-        temporary = Path(f"{self.source}.tmp")
-        temporary.write_text(yaml.safe_dump(override, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        temporary.replace(self.source)
-        return selected
+            raise ValueError("The fixed BF16 qwentts model pair is incomplete")
+        return self.path("qwentts.talker_model", ""), self.path("qwentts.codec_model", "")
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

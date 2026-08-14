@@ -30,6 +30,8 @@ def persist_state_or_stop(
 
 
 def main() -> int:
+    if os.environ.get("QWEN3_TTS_SESSION_INTERNAL") != "1":
+        raise RuntimeError("qwentts-runner.py is an internal component; use start.ps1 or start-tts-and-comfyui.bat")
     parser = argparse.ArgumentParser(description="Project-owned persistent qwentts.cpp runner")
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
@@ -40,10 +42,10 @@ def main() -> int:
     runtime.mkdir(parents=True, exist_ok=True)
     logs.mkdir(parents=True, exist_ok=True)
     executable = config.path("qwentts.executable", "runtime/qwentts/bin/tts-server.exe")
-    model_variant, talker_model, codec_model = config.qwentts_model()
+    talker_model, codec_model = config.qwentts_models()
     for required in (executable, talker_model, codec_model):
         if not required.exists():
-            raise FileNotFoundError(f"Required qwentts {model_variant} runtime file is missing: {required}")
+            raise FileNotFoundError(f"Required qwentts BF16 runtime file is missing: {required}")
     command = [
         str(executable),
         "--model", str(talker_model),
@@ -68,7 +70,7 @@ def main() -> int:
             "runner_parent_pid": os.getppid(),
             "executable": str(executable),
             "command": command,
-            "model_variant": model_variant,
+            "model_variant": "bf16",
             "talker_model": talker_model.name,
             "codec_model": codec_model.name,
             "session_id": session_id,

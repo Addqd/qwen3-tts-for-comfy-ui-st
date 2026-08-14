@@ -8,6 +8,8 @@ Canonical workflow: `example_workflows/voice_profile_from_wav_ru.json`.
 
 Nodes: Server, Runtime Settings, Clone Voice, Synthesize, Voice Selector, Models и Health.
 
+Production model фиксирован на Qwen3-TTS 1.7B Base BF16, поэтому model selector отсутствует. Runtime Settings управляет optional Silero Stress и Silero Text Enhancement через существующий backend runtime-settings API; оба preprocessing-компонента CPU-only, независимы и могут работать вместе.
+
 Managed установка:
 
 ```powershell

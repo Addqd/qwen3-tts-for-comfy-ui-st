@@ -26,7 +26,27 @@ def test_active_python_is_lightweight_and_config_is_qwentts_only(tmp_path):
     config = load_config(ROOT / "config" / "config.example.yaml")
     assert config.get("qwentts.backend") == "CUDA0"
     assert config.get("qwentts.model_id") == "tts-1-ru"
+    assert config.get("qwentts.talker_model").endswith("BF16.gguf")
+    assert config.get("qwentts.codec_model").endswith("BF16.gguf")
+    assert config.get("qwentts.active_model") is None
+    manifest = json.loads((ROOT / "config" / "qwentts-runtime.json").read_text(encoding="utf-8"))
+    assert set(manifest["models"]["files"]) == {
+        "qwen-talker-1.7b-base-BF16.gguf", "qwen-tokenizer-12hz-BF16.gguf"
+    }
     assert config.get("voices.default_voice") == "clone:test_ru_dima_neutral"
+    active_text = "\n".join(
+        path.read_text(encoding="utf-8-sig")
+        for path in [
+            ROOT / "config" / "config.example.yaml",
+            ROOT / "config" / "qwentts-runtime.json",
+            ROOT / "scripts" / "ensure-qwentts-models.ps1",
+            ROOT / "scripts" / "verify-qwentts-runtime.ps1",
+            ROOT / "scripts" / "qwentts-runner.py",
+            ROOT / "start.ps1",
+        ]
+    )
+    assert "Q8_0" not in active_text
+    assert "active_model" not in active_text
 
 
 def test_legacy_runtime_settings_are_migrated_to_real_qwentts_controls(tmp_path):
@@ -47,9 +67,11 @@ def test_synthetic_profile_uses_persisted_qwentts_assets(tmp_path):
     config = load_config(ROOT / "config" / "config.example.yaml")
     profile_dir = tmp_path / "profiles" / "synthetic"
     profile_dir.mkdir(parents=True)
+    variant_dir = profile_dir / "variants" / "bf16"
+    variant_dir.mkdir(parents=True)
     (profile_dir / "reference.wav").write_bytes(b"RIFFsyntheticWAVE")
-    (profile_dir / "reference.spk").write_bytes(b"s" * 8192)
-    (profile_dir / "reference.rvq").write_bytes(b"r" * 32)
+    (variant_dir / "reference.spk").write_bytes(b"s" * 8192)
+    (variant_dir / "reference.rvq").write_bytes(b"r" * 32)
     (profile_dir / "metadata.json").write_text(json.dumps({
         "profile_id": "synthetic",
         "display_name": "synthetic",

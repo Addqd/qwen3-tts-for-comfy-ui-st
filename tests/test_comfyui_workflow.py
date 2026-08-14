@@ -25,14 +25,20 @@ def test_canonical_voice_lab_matches_current_node_schema():
     module = load_nodes()
     workflow = json.loads(WORKFLOW_PATH.read_text(encoding="utf-8"))
     by_type = {node["type"]: node for node in workflow["nodes"]}
-    assert workflow["extra"]["qwen_tts_workflow_schema"] == 4
+    assert workflow["extra"]["qwen_tts_workflow_schema"] == 5
     assert {"QwenTTSServer", "QwenTTSRuntimeSettings", "QwenTTSCloneVoice", "QwenTTSSynthesize", "PreviewAudio"} <= set(by_type)
     assert module.PRODUCTION_MODEL.endswith("(tts-1-ru)")
     assert by_type["QwenTTSServer"]["widgets_values"] == ["http://127.0.0.1:8020", 900, "wav"]
-    assert len(by_type["QwenTTSRuntimeSettings"]["widgets_values"]) == 10
+    assert by_type["QwenTTSRuntimeSettings"]["widgets_values"] == [
+        True, "Russian", "Full Russian", "Silero Stress", "Silero +", "Off", -1, "fixed",
+        4096, 0.75, 40, 0.9, 1.05, "",
+    ]
     assert len(by_type["QwenTTSCloneVoice"]["widgets_values"]) == 5
     assert by_type["QwenTTSCloneVoice"]["widgets_values"][-1] is False
-    assert len(by_type["QwenTTSSynthesize"]["widgets_values"]) == 12
+    assert by_type["QwenTTSSynthesize"]["widgets_values"] == [
+        "Она открыла Visual Studio Code и сказала hello.", "clone:test_ru_dima_neutral", 1.0,
+        "wav", "Use Backend Default", "", -1, "fixed", -1, -1.0, -1, -1.0, -1.0,
+    ]
     links = {(link[1], link[3], link[5]) for link in workflow["links"]}
     assert (4, 5, "STRING") in links
     assert (5, 6, "AUDIO") in links
@@ -42,8 +48,8 @@ def test_active_node_inputs_are_real_qwentts_controls_only():
     module = load_nodes()
     runtime = module.QwenTTSRuntimeSettingsNode.INPUT_TYPES()
     names = set(runtime["required"]) | set(runtime.get("optional", {}))
-    assert {"language", "russian_normalization", "seed", "max_new_tokens", "temperature", "top_k", "top_p", "repetition_penalty"} <= names
-    assert names.isdisjoint({"active_model", "generation_preset", "multilingual_mode", "chunking_mode", "style", "clone_mode"})
+    assert {"language", "russian_normalization", "auto_stress", "stress_format", "text_enhancement", "seed", "max_new_tokens", "temperature", "top_k", "top_p", "repetition_penalty"} <= names
+    assert names.isdisjoint({"active_model", "model_variant", "generation_preset", "multilingual_mode", "chunking_mode", "style", "clone_mode"})
     clone = module.QwenTTSCloneVoiceNode.INPUT_TYPES()["required"]
     assert list(clone)[-1] == "overwrite"
 

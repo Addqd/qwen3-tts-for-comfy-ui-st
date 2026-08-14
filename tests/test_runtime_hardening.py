@@ -40,9 +40,11 @@ class RecordingClient:
 def write_profile(root: Path, ref_text: str = "old") -> Path:
     target = root / "profiles" / "voice"
     target.mkdir(parents=True)
+    variant = target / "variants" / "bf16"
+    variant.mkdir(parents=True)
     (target / "reference.wav").write_bytes(b"old-wav")
-    (target / "reference.spk").write_bytes(b"old-spk")
-    (target / "reference.rvq").write_bytes(b"old-rvq")
+    (variant / "reference.spk").write_bytes(b"old-spk")
+    (variant / "reference.rvq").write_bytes(b"old-rvq")
     (target / "metadata.json").write_text(json.dumps({
         "profile_id": "voice", "display_name": "voice", "character": "Voice",
         "reference_audio": "reference.wav", "ref_text": ref_text, "language": "Russian",
@@ -50,8 +52,9 @@ def write_profile(root: Path, ref_text: str = "old") -> Path:
     return target
 
 
-def fake_encode(reference: Path) -> tuple[Path, Path]:
-    spk, rvq = reference.with_suffix(".spk"), reference.with_suffix(".rvq")
+def fake_encode(_reference: Path, variant_dir: Path) -> tuple[Path, Path]:
+    variant_dir.mkdir(parents=True, exist_ok=True)
+    spk, rvq = variant_dir / "reference.spk", variant_dir / "reference.rvq"
     spk.write_bytes(b"new-spk")
     rvq.write_bytes(b"new-rvq")
     return spk, rvq
@@ -66,9 +69,9 @@ async def test_voice_overwrite_is_prepared_off_loop_and_rolls_back_registration(
     event_thread = threading.get_ident()
     encoding_threads: list[int] = []
 
-    def encode(reference: Path):
+    def encode(reference: Path, variant_dir: Path):
         encoding_threads.append(threading.get_ident())
-        return fake_encode(reference)
+        return fake_encode(reference, variant_dir)
 
     monkeypatch.setattr(library, "_encode", encode)
     client = RecordingClient(fail_ref_text="new")
@@ -90,7 +93,7 @@ async def test_voice_preparation_failure_does_not_mutate_active_profile(tmp_path
     source.write_bytes(b"new-wav")
     library = VoiceLibrary(tmp_path, load_config(ROOT / "config" / "config.example.yaml"))
 
-    def fail_encode(_reference: Path):
+    def fail_encode(_reference: Path, _variant_dir: Path):
         raise RuntimeError("codec failed")
 
     monkeypatch.setattr(library, "_encode", fail_encode)

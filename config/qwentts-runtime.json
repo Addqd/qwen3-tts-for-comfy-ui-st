@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "upstream": {
     "repository": "https://github.com/ServeurpersoCom/qwentts.cpp",
     "revision": "7b6ed4f6db964c14fd3ac36c1ca13f1ce6150f4e",
@@ -11,9 +11,7 @@
     "download_base_url": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/e0f336a048a3de02b29b8ad92969217d9ecffe3e/",
     "files": {
       "qwen-talker-1.7b-base-BF16.gguf": "7f4567113f3aa07e842fac6d17a10a98cf3d0068c0871ac245ac9befc63affa5",
-      "qwen-tokenizer-12hz-BF16.gguf": "cc04d7352ff4cb339435cdccf59cf38e6e92f3cf789bc94a6a1b467093bafa18",
-      "qwen-talker-1.7b-base-Q8_0.gguf": "4b9a33a236908dd9435a42f7a396e38038329d053b704342a6413c08544c4fda",
-      "qwen-tokenizer-12hz-Q8_0.gguf": "1883beeed99348fc35e23dd225e9082f93f6f8c109330a33d935baa8acdbfd94"
+      "qwen-tokenizer-12hz-BF16.gguf": "cc04d7352ff4cb339435cdccf59cf38e6e92f3cf789bc94a6a1b467093bafa18"
     }
   },
   "files": {

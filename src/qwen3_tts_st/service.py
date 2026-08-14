@@ -12,17 +12,19 @@ from typing import Any
 
 import httpx
 
-from .normalization import apply_pronunciation, merge_pronunciation, normalize_russian_text
+from .normalization import merge_pronunciation, normalize_russian_text, split_pronunciation_spans
 from .preprocess import preprocess
 from .runtime_settings import RuntimeSettingsStore
+from .silero_preprocessing import SileroPreprocessor
 from .voices import VoiceLibrary
 
 
 class TTSService:
     def __init__(self, config: Any):
         self.config = config
-        self.model_variant, self.talker_model, self.codec_model = config.qwentts_model()
+        self.talker_model, self.codec_model = config.qwentts_models()
         self.settings = RuntimeSettingsStore(config)
+        self.silero = SileroPreprocessor(config.path("silero.provision_state", "runtime/silero-provisioned.json"))
         self.library = VoiceLibrary(config.path("voices.library_dir", "voice_library"), config)
         self.default_voice = str(config.get("voices.default_voice", "clone:test_ru_dima_neutral"))
         self.qwentts_url = f"http://127.0.0.1:{int(config.get('qwentts.port', 8030))}"
@@ -82,19 +84,24 @@ class TTSService:
                     device = state.get("verified_backend")
                 except (OSError, AttributeError, TypeError, ValueError, json.JSONDecodeError):
                     device = None
+        current = self.settings.current()
         return {
             "status": "ok" if qwentts_ready else "degraded",
             "engine": "qwentts.cpp",
             "engine_revision": self.engine_revision,
             "model": "tts-1-ru",
-            "model_variant": self.model_variant,
+            "model_variant": "bf16",
             "model_file": self.talker_model.name,
             "device": device,
             "qwentts_ready": qwentts_ready,
             "qwentts_url": self.qwentts_url,
             "default_voice": self.default_voice,
             "voice_count": len(self.library.list()),
-            "runtime_settings": self.settings.current(),
+            "runtime_settings": current,
+            "auto_stress": current["auto_stress"],
+            "stress_format": current["stress_format"],
+            "text_enhancement": current["text_enhancement"],
+            **self.silero.diagnostics(),
             "uptime_seconds": round(time.time() - self.started_at, 1),
         }
 
@@ -148,6 +155,38 @@ class TTSService:
                 raise RuntimeError("FFmpeg conversion completed without an output file")
             return output.read_bytes(), media[response_format]
 
+    async def _prepare_text(self, request: Any, current: dict[str, Any]) -> tuple[str, int, str, float, float]:
+        prepared = preprocess(request.input, dict(self.config.get("preprocessing", {}) or {}))
+        pronunciation = merge_pronunciation(current["pronunciation_defaults"], request.pronunciation_overrides)
+        spans, replacements = split_pronunciation_spans(prepared, pronunciation)
+        automatic_enabled = current["auto_stress"] != "off" or current["text_enhancement"] != "off"
+        pieces: list[str] = []
+        stress_seconds = 0.0
+        te_seconds = 0.0
+        for span in spans:
+            if span.replacement is not None:
+                pieces.append(span.replacement)
+                continue
+            if not automatic_enabled:
+                pieces.append(span.text)
+                continue
+            transformed, timings = await asyncio.to_thread(
+                self.silero.process,
+                span.text,
+                current["text_enhancement"],
+                current["auto_stress"],
+                current["stress_format"],
+            )
+            pieces.append(transformed)
+            stress_seconds += timings["stress_seconds"]
+            te_seconds += timings["text_enhancement_seconds"]
+        self.silero.record_timings(stress_seconds, te_seconds)
+        normalization = request.russian_normalization or current["russian_normalization"]
+        prepared = normalize_russian_text("".join(pieces), normalization)
+        if not prepared:
+            raise ValueError("No pronounceable text remains after preprocessing")
+        return prepared, replacements, normalization, stress_seconds, te_seconds
+
     async def synthesize(self, request: Any) -> tuple[bytes, str, dict[str, Any]]:
         async with self._synthesis_slot():
             started = time.perf_counter()
@@ -155,13 +194,7 @@ class TTSService:
                 voice = request.voice or self.default_voice
                 self.library.resolve(voice)
                 current = self.settings.current()
-                prepared = preprocess(request.input, dict(self.config.get("preprocessing", {}) or {}))
-                pronunciation = merge_pronunciation(current["pronunciation_defaults"], request.pronunciation_overrides)
-                prepared, replacements = apply_pronunciation(prepared, pronunciation)
-                normalization = request.russian_normalization or current["russian_normalization"]
-                prepared = normalize_russian_text(prepared, normalization)
-                if not prepared:
-                    raise ValueError("No pronounceable text remains after preprocessing")
+                prepared, replacements, normalization, stress_seconds, te_seconds = await self._prepare_text(request, current)
                 payload = {
                     "model": "tts-1-ru",
                     "voice": voice,
@@ -188,6 +221,11 @@ class TTSService:
                     "voice": voice,
                     "language": "Russian",
                     "russian_normalization": normalization,
+                    "auto_stress": current["auto_stress"],
+                    "stress_format": current["stress_format"],
+                    "text_enhancement": current["text_enhancement"],
+                    "stress_preprocessing_wall_seconds": round(stress_seconds, 6),
+                    "text_enhancement_wall_seconds": round(te_seconds, 6),
                     "pronunciation_replacements": replacements,
                     "wall_seconds": round(time.perf_counter() - started, 3),
                 }
@@ -199,4 +237,9 @@ class TTSService:
                 raise
 
     def metrics(self) -> dict[str, Any]:
-        return {"completed": self.completed, "failed": self.failed, "last": self.last_metrics}
+        return {
+            "completed": self.completed,
+            "failed": self.failed,
+            "silero": self.silero.diagnostics(),
+            "last": self.last_metrics,
+        }

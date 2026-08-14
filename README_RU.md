@@ -2,14 +2,14 @@
 
 Production neural engine проекта — persistent `qwentts.cpp` на `127.0.0.1:8030`:
 
-- Qwen3-TTS 1.7B Base;
-- `qwen-talker-1.7b-base-Q8_0.gguf`;
-- `qwen-tokenizer-12hz-Q8_0.gguf`;
+- Qwen3-TTS 1.7B Base, только BF16;
+- `qwen-talker-1.7b-base-BF16.gguf`;
+- `qwen-tokenizer-12hz-BF16.gguf`;
 - CUDA на RTX 2070 SUPER;
 - основной голос `clone:test_ru_dima_neutral`;
 - один и тот же voice ID используется API, SillyTavern и ComfyUI.
 
-Лёгкий Python facade на `127.0.0.1:8020` выполняет только OpenAI-compatible API, очистку/нормализацию текста, pronunciation replacements, управление voice profiles и преобразование WAV в требуемый формат. Он не импортирует PyTorch, Transformers или `qwen_tts`.
+Лёгкий Python facade на `127.0.0.1:8020` выполняет OpenAI-compatible API, нормализацию, pronunciation replacements, voice profiles и преобразование аудио. Он также содержит optional CPU preprocessing: Silero Stress (по умолчанию включён) и Silero Text Enhancement (по умолчанию выключен). Обе модели используют один CPU-only PyTorch с одним потоком, загружаются лениво по одному разу и не занимают VRAM.
 
 ## Запуск
 
@@ -25,7 +25,9 @@ Backend и ComfyUI вместе:
 .\start-tts-and-comfyui.bat
 ```
 
-Startup проверяет SHA-256 официального prebuilt и GGUF, запускает одну persistent CUDA-модель, регистрирует сохранённые `.spk/.rvq`, затем запускает facade. Shutdown завершает только PID процессов проекта.
+Startup проверяет SHA-256 официального prebuilt и BF16 GGUF, запускает одну persistent CUDA-модель, регистрирует сохранённые `.spk/.rvq`, затем запускает facade. Все поддерживаемые launcher-пути создают или присоединяются к одной project session. Закрытие launcher, facade, qwentts-runner, qwentts.cpp или ComfyUI завершает всю управляемую session и освобождает порты `8020`, `8030`, `8188`, не затрагивая чужие процессы.
+
+Silero Stress и Text Enhancement независимы и могут работать вместе. Настройки сохраняются существующим `GET/PUT /admin/runtime-settings`. Ручные pronunciation overrides имеют приоритет над автоматической обработкой. Форматы ударений `+`, combining acute и apostrophe экспериментальны и требуют ручного A/B-прослушивания; Text Enhancement может изменить авторскую пунктуацию.
 
 ## API
 

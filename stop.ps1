@@ -47,6 +47,12 @@ $Results = @(
 )
 if ($Results -notcontains $false) {
     Remove-Item -LiteralPath $StatePath,$QwenStatePath -Force -ErrorAction SilentlyContinue
+    if ($env:QWEN3_TTS_SUPERVISOR_CLEANUP -ne "1") {
+        $SessionState = Join-Path $PSScriptRoot "runtime\project-session.json"
+        $Deadline = (Get-Date).AddSeconds(20)
+        while ((Test-Path -LiteralPath $SessionState) -and (Get-Date) -lt $Deadline) { Start-Sleep -Milliseconds 200 }
+        if (Test-Path -LiteralPath $SessionState) { throw "Project session supervisor did not complete teardown within 20 seconds." }
+    }
     exit 0
 }
 throw "Project shutdown is incomplete. Runtime state was preserved for a safe retry."

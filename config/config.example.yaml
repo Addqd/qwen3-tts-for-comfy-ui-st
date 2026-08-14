@@ -7,14 +7,8 @@ qwentts:
   port: 8030
   executable: runtime/qwentts/bin/tts-server.exe
   codec_executable: runtime/qwentts/bin/qwen-codec.exe
-  active_model: bf16
-  models:
-    bf16:
-      talker_model: runtime/qwentts/models/qwen-talker-1.7b-base-BF16.gguf
-      codec_model: runtime/qwentts/models/qwen-tokenizer-12hz-BF16.gguf
-    q8:
-      talker_model: runtime/qwentts/models/qwen-talker-1.7b-base-Q8_0.gguf
-      codec_model: runtime/qwentts/models/qwen-tokenizer-12hz-Q8_0.gguf
+  talker_model: runtime/qwentts/models/qwen-talker-1.7b-base-BF16.gguf
+  codec_model: runtime/qwentts/models/qwen-tokenizer-12hz-BF16.gguf
   model_id: tts-1-ru
   language: Russian
   backend: CUDA0
@@ -28,6 +22,9 @@ voices:
 
 runtime_defaults:
   russian_normalization: full
+  auto_stress: silero
+  stress_format: plus
+  text_enhancement: "off"
   pronunciation_defaults: {}
   seed: -1
   max_new_tokens: 4096
@@ -55,6 +52,9 @@ logging:
 runtime:
   dir: runtime
   settings_file: runtime/tts-settings.json
+
+silero:
+  provision_state: runtime/silero-provisioned.json
 
 comfyui:
   enabled: true

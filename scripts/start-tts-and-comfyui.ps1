@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "comfyui-common.ps1")
+. (Join-Path $PSScriptRoot "session-common.ps1")
 $Settings = Get-ComfyUISettings -Config $Config
 $BackendUrl = "http://127.0.0.1:$($Settings.backend_port)"
 $ComfyUrl = "http://127.0.0.1:$($Settings.port)"
@@ -16,7 +17,7 @@ $BackendStartAttempted = $false
 $ComfyUIStartAttempted = $false
 $BackendProcess = $null
 $ComfyProcess = $null
-$WatchProcess = $null
+$SupervisorProcess = $null
 
 function Get-BackendOwnedProcess {
     param($State)
@@ -72,55 +73,6 @@ function Get-RequiredBackendProcess {
     return $Process
 }
 
-function Quote-ProcessArgument {
-    param([string]$Value)
-    return '"' + $Value.Replace('"', '\"') + '"'
-}
-
-function Start-SessionWatcher {
-    param($LauncherProcess, $BackendProcess, $ComfyProcess)
-    $WatcherScript = Join-Path $PSScriptRoot "watch-tts-and-comfyui.ps1"
-    $BackendStatePath = Join-Path $script:ProjectRoot "runtime\server.json"
-    $BackendState = Get-Content -Raw -LiteralPath $BackendStatePath | ConvertFrom-Json
-    $EngineProcess = Get-BackendRecordProcess -Record $BackendState.engine
-    $RunnerProcess = Get-BackendRecordProcess -Record $BackendState.runner
-    if (-not $EngineProcess -or -not $RunnerProcess) {
-        throw "The qwentts.cpp engine or its runner could not be verified from the project PID file."
-    }
-    $BackendExecutable = [System.IO.Path]::GetFullPath([string]$BackendProcess.Path)
-    $EngineExecutable = [System.IO.Path]::GetFullPath([string]$EngineProcess.Path)
-    $RunnerExecutable = [System.IO.Path]::GetFullPath([string]$RunnerProcess.Path)
-    $ComfyExecutable = [System.IO.Path]::GetFullPath([string]$ComfyProcess.Path)
-    $LauncherExecutable = [System.IO.Path]::GetFullPath([string]$LauncherProcess.Path)
-    $Arguments = @(
-        "-NoLogo", "-NoProfile", "-File", (Quote-ProcessArgument $WatcherScript),
-        "-LauncherPid", [string]$LauncherProcess.Id,
-        "-LauncherStartTicks", [string]$LauncherProcess.StartTime.ToUniversalTime().Ticks,
-        "-LauncherExecutable", (Quote-ProcessArgument $LauncherExecutable),
-        "-BackendPid", [string]$BackendProcess.Id,
-        "-BackendStartTicks", [string]$BackendProcess.StartTime.ToUniversalTime().Ticks,
-        "-BackendExecutable", (Quote-ProcessArgument $BackendExecutable),
-        "-EnginePid", [string]$EngineProcess.Id,
-        "-EngineStartTicks", [string]$EngineProcess.StartTime.ToUniversalTime().Ticks,
-        "-EngineExecutable", (Quote-ProcessArgument $EngineExecutable),
-        "-RunnerPid", [string]$RunnerProcess.Id,
-        "-RunnerStartTicks", [string]$RunnerProcess.StartTime.ToUniversalTime().Ticks,
-        "-RunnerExecutable", (Quote-ProcessArgument $RunnerExecutable),
-        "-ComfyPid", [string]$ComfyProcess.Id,
-        "-ComfyStartTicks", [string]$ComfyProcess.StartTime.ToUniversalTime().Ticks,
-        "-ComfyExecutable", (Quote-ProcessArgument $ComfyExecutable),
-        "-ProjectRoot", (Quote-ProcessArgument $script:ProjectRoot)
-    )
-    $StartInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $StartInfo.FileName = $LauncherExecutable
-    $StartInfo.Arguments = $Arguments -join " "
-    $StartInfo.WorkingDirectory = $script:ProjectRoot
-    $StartInfo.UseShellExecute = $false
-    $StartInfo.CreateNoWindow = $true
-    $StartInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    return [System.Diagnostics.Process]::Start($StartInfo)
-}
-
 if ($WaitForComfyUIExit -and -not $VisibleComfyUIConsole) {
     throw "WaitForComfyUIExit requires VisibleComfyUIConsole. No services were started."
 }
@@ -129,22 +81,20 @@ try {
     if (Test-LocalHttp -Uri "$ComfyUrl/system_stats") {
         Assert-QwenTTSCloneVoiceSchema -Url $ComfyUrl
         Write-Host "ComfyUI is already ready: $ComfyUrl"
-        if ($WaitForComfyUIExit) {
-            if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
-                $ComfyState = Get-Content -Raw -LiteralPath $script:ComfyUIStatePath | ConvertFrom-Json
-                $ComfyProcess = Test-ComfyUIOwnedProcess -State $ComfyState
-            }
+        if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
+            $ComfyState = Get-Content -Raw -LiteralPath $script:ComfyUIStatePath | ConvertFrom-Json
+            $ComfyProcess = Test-ComfyUIOwnedProcess -State $ComfyState
+        }
+        if (-not $ComfyProcess) {
+            $ComfyProcess = Get-ComfyUIListenerOwnedProcess -Settings $Settings
             if (-not $ComfyProcess) {
-                $ComfyProcess = Get-ComfyUIListenerOwnedProcess -Settings $Settings
-                if (-not $ComfyProcess) {
-                    throw "Port $($Settings.port) is served by a process that cannot be verified as this project's ComfyUI. The backend was not started and no process was stopped."
-                }
-                $ComfyState = Save-AdoptedComfyUIState -Process $ComfyProcess -Settings $Settings
-                Write-Host "Recovered project ownership for the existing ComfyUI process (PID $($ComfyProcess.Id))."
+                throw "Port $($Settings.port) is served by a process that cannot be verified as this project's ComfyUI. The backend was not started and no process was stopped."
             }
+            $ComfyState = Save-AdoptedComfyUIState -Process $ComfyProcess -Settings $Settings
+            Write-Host "Recovered project ownership for the existing ComfyUI process (PID $($ComfyProcess.Id))."
         }
     } else {
-        $StartArguments = @{ Config = $Config }
+        $StartArguments = @{ Config = $Config; NoSessionSupervisor = $true }
         if (-not $VisibleComfyUIConsole) { $StartArguments.Hidden = $true }
         $ComfyUIStartAttempted = $true
         & (Join-Path $PSScriptRoot "start-comfyui.ps1") @StartArguments
@@ -158,7 +108,7 @@ try {
 
     if (-not (Test-LocalHttp -Uri "$BackendUrl/health")) {
         $BackendStartAttempted = $true
-        & (Join-Path $script:ProjectRoot "start.ps1") -Config $Config
+        & (Join-Path $script:ProjectRoot "start.ps1") -Config $Config -NoSessionSupervisor
         $BackendStarted = $true
         if ($WaitForComfyUIExit) { $BackendProcess = Get-RequiredBackendProcess }
     } else {
@@ -169,23 +119,38 @@ try {
     Write-Host "TTS backend: $BackendUrl (started by this command: $BackendStarted)"
     Write-Host "ComfyUI: $ComfyUrl (started by this command: $ComfyUIStarted)"
 
-    if ($WaitForComfyUIExit) {
-        $LauncherProcess = Get-Process -Id $PID
-        $WatchProcess = Start-SessionWatcher -LauncherProcess $LauncherProcess -BackendProcess $BackendProcess -ComfyProcess $ComfyProcess
-        Start-Sleep -Milliseconds 750
-        if ($WatchProcess.HasExited) { throw "The session watcher exited before it became ready." }
+    if (-not $BackendProcess) { $BackendProcess = Get-RequiredBackendProcess }
+    if (-not $ComfyProcess) {
+        $ComfyState = Get-Content -Raw -LiteralPath $script:ComfyUIStatePath | ConvertFrom-Json
+        $ComfyProcess = Test-ComfyUIOwnedProcess -State $ComfyState
+    }
+    if (-not $ComfyProcess) { throw "The project ComfyUI process could not be verified for session supervision." }
+    $BackendStatePath = Join-Path $script:ProjectRoot "runtime\server.json"
+    $BackendState = Get-Content -Raw -LiteralPath $BackendStatePath | ConvertFrom-Json
+    $EngineProcess = Get-BackendRecordProcess -Record $BackendState.engine
+    $RunnerProcess = Get-BackendRecordProcess -Record $BackendState.runner
+    if (-not $EngineProcess -or -not $RunnerProcess) {
+        throw "The qwentts.cpp engine or its runner could not be verified for session supervision."
+    }
+    $SupervisorProcess = Start-OrJoin-ProjectSession -OwnerName "combined launcher" -MonitorOwner -Components @(
+        @{ name = "facade"; pid = $BackendProcess.Id },
+        @{ name = "qwentts runner"; pid = $RunnerProcess.Id },
+        @{ name = "qwentts.cpp"; pid = $EngineProcess.Id },
+        @{ name = "ComfyUI"; pid = $ComfyProcess.Id }
+    )
+    Write-Host "Project session supervisor: PID $($SupervisorProcess.Id)"
 
-        Write-Host "Session watcher: PID $($WatchProcess.Id)"
+    if ($WaitForComfyUIExit) {
         Write-Host "Close this launcher window or the ComfyUI Python console to stop qwentts.cpp and ComfyUI."
         try {
             Wait-Process -Id $ComfyProcess.Id
         } finally {
             try { & (Join-Path $script:ProjectRoot "stop.ps1") } catch { Write-Warning "Backend cleanup: $($_.Exception.Message)" }
             try { & (Join-Path $PSScriptRoot "stop-comfyui.ps1") } catch { Write-Warning "ComfyUI cleanup: $($_.Exception.Message)" }
-            if ($WatchProcess -and -not $WatchProcess.HasExited) {
-                try { Wait-Process -Id $WatchProcess.Id -Timeout 10 -ErrorAction SilentlyContinue } catch { }
-                $WatchProcess.Refresh()
-                if (-not $WatchProcess.HasExited) { Stop-Process -Id $WatchProcess.Id }
+            if ($SupervisorProcess -and -not $SupervisorProcess.HasExited) {
+                try { Wait-Process -Id $SupervisorProcess.Id -Timeout 15 -ErrorAction SilentlyContinue } catch { }
+                $SupervisorProcess.Refresh()
+                if (-not $SupervisorProcess.HasExited) { Stop-Process -Id $SupervisorProcess.Id }
             }
         }
         Write-Host "Project session stopped. Backend and ComfyUI are closed."
