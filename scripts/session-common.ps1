@@ -1,5 +1,62 @@
 $script:ProjectSessionStatePath = Join-Path $script:ProjectRoot "runtime\project-session.json"
 
+function Test-ProjectSessionComponent {
+    param([Parameter(Mandatory = $true)][string[]]$Names)
+    if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) { return $false }
+    try {
+        $State = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
+        return (@($State.components | Where-Object { $Names -contains [string]$_.name }).Count -gt 0)
+    } catch {
+        return $false
+    }
+}
+
+function Wait-ProjectSessionTeardown {
+    param([int]$Seconds = 20)
+    $Deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Test-Path -LiteralPath $script:ProjectSessionStatePath) -and (Get-Date) -lt $Deadline) {
+        Start-Sleep -Milliseconds 200
+    }
+    if (Test-Path -LiteralPath $script:ProjectSessionStatePath) {
+        Write-Warning "Project session supervisor did not complete teardown within $Seconds seconds. The component stop itself succeeded."
+    }
+}
+
+function Request-ProjectSessionTeardown {
+    param([Parameter(Mandatory = $true)]$Supervisor, [string]$Reason)
+    if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
+        $PreviousCleanup = $env:QWEN3_TTS_SUPERVISOR_CLEANUP
+        $env:QWEN3_TTS_SUPERVISOR_CLEANUP = "1"
+        try {
+            try { & (Join-Path $script:ProjectRoot "scripts\stop-comfyui.ps1") } catch { Write-Warning $_.Exception.Message }
+            try { & (Join-Path $script:ProjectRoot "stop.ps1") } catch { Write-Warning $_.Exception.Message }
+        } finally {
+            if ($null -eq $PreviousCleanup) { Remove-Item Env:QWEN3_TTS_SUPERVISOR_CLEANUP -ErrorAction SilentlyContinue }
+            else { $env:QWEN3_TTS_SUPERVISOR_CLEANUP = $PreviousCleanup }
+        }
+        try { Wait-Process -Id $Supervisor.Id -Timeout 20 -ErrorAction SilentlyContinue } catch { }
+        if (Get-Process -Id $Supervisor.Id -ErrorAction SilentlyContinue) {
+            Write-Warning "Project session state was not published; graceful component cleanup was attempted and the supervisor was left to fail safely."
+        }
+        return
+    }
+    try {
+        $State = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
+        if ([int]$State.supervisor.pid -ne [int]$Supervisor.Id) {
+            Write-Warning "Project session state belongs to another supervisor; the new supervisor was left to fail safely without terminating adopted processes."
+            return
+        }
+        $State | Add-Member -NotePropertyName stop_requested -NotePropertyValue $true -Force
+        $State | Add-Member -NotePropertyName stop_reason -NotePropertyValue $Reason -Force
+        $Temporary = "$script:ProjectSessionStatePath.$PID.tmp"
+        $State | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Temporary -Encoding UTF8
+        Move-Item -LiteralPath $Temporary -Destination $script:ProjectSessionStatePath -Force
+        try { Wait-Process -Id $Supervisor.Id -Timeout 20 -ErrorAction SilentlyContinue } catch { }
+    } catch {
+        Write-Warning "Unable to request controlled project-session teardown: $($_.Exception.Message)"
+    }
+}
+
 function Start-OrJoin-ProjectSession {
     param(
         [Parameter(Mandatory = $true)][array]$Components,
@@ -51,12 +108,12 @@ function Start-OrJoin-ProjectSession {
         }
     } while (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath) -and (Get-Date) -lt $Deadline)
     if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
-        Stop-Process -Id $Supervisor.Id -ErrorAction SilentlyContinue
+        Request-ProjectSessionTeardown -Supervisor $Supervisor -Reason "session state publication timed out"
         throw "Project session supervisor did not publish its state within 15 seconds."
     }
     $State = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
     if ([int]$State.supervisor.pid -ne $Supervisor.Id) {
-        Stop-Process -Id $Supervisor.Id -ErrorAction SilentlyContinue
+        Request-ProjectSessionTeardown -Supervisor $Supervisor -Reason "published state identity mismatch"
         throw "Project session supervisor state belongs to another process."
     }
     return $Supervisor

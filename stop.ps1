@@ -1,8 +1,11 @@
 $ErrorActionPreference = "Stop"
+$script:ProjectRoot = $PSScriptRoot
+. (Join-Path $PSScriptRoot "scripts\session-common.ps1")
 $StatePath = Join-Path $PSScriptRoot "runtime\server.json"
 $QwenStatePath = Join-Path $PSScriptRoot "runtime\qwentts.json"
 if (-not (Test-Path -LiteralPath $StatePath)) { Write-Host "Backend is not running (no PID file)."; exit 0 }
 $State = Get-Content -Raw -LiteralPath $StatePath -Encoding UTF8 | ConvertFrom-Json
+$WaitForSession = Test-ProjectSessionComponent -Names @("facade", "qwentts.cpp", "qwentts runner")
 
 function Stop-ProjectProcess {
     param($Record, [string]$Name)
@@ -47,12 +50,7 @@ $Results = @(
 )
 if ($Results -notcontains $false) {
     Remove-Item -LiteralPath $StatePath,$QwenStatePath -Force -ErrorAction SilentlyContinue
-    if ($env:QWEN3_TTS_SUPERVISOR_CLEANUP -ne "1") {
-        $SessionState = Join-Path $PSScriptRoot "runtime\project-session.json"
-        $Deadline = (Get-Date).AddSeconds(20)
-        while ((Test-Path -LiteralPath $SessionState) -and (Get-Date) -lt $Deadline) { Start-Sleep -Milliseconds 200 }
-        if (Test-Path -LiteralPath $SessionState) { throw "Project session supervisor did not complete teardown within 20 seconds." }
-    }
+    if ($env:QWEN3_TTS_SUPERVISOR_CLEANUP -ne "1" -and $WaitForSession) { Wait-ProjectSessionTeardown }
     exit 0
 }
 throw "Project shutdown is incomplete. Runtime state was preserved for a safe retry."

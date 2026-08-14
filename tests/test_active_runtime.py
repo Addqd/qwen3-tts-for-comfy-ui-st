@@ -26,8 +26,9 @@ def test_active_python_is_lightweight_and_config_is_qwentts_only(tmp_path):
     config = load_config(ROOT / "config" / "config.example.yaml")
     assert config.get("qwentts.backend") == "CUDA0"
     assert config.get("qwentts.model_id") == "tts-1-ru"
-    assert config.get("qwentts.talker_model").endswith("BF16.gguf")
-    assert config.get("qwentts.codec_model").endswith("BF16.gguf")
+    talker, codec = config.qwentts_models()
+    assert talker.name == "qwen-talker-1.7b-base-BF16.gguf"
+    assert codec.name == "qwen-tokenizer-12hz-BF16.gguf"
     assert config.get("qwentts.active_model") is None
     manifest = json.loads((ROOT / "config" / "qwentts-runtime.json").read_text(encoding="utf-8"))
     assert set(manifest["models"]["files"]) == {
@@ -47,6 +48,21 @@ def test_active_python_is_lightweight_and_config_is_qwentts_only(tmp_path):
     )
     assert "Q8_0" not in active_text
     assert "active_model" not in active_text
+
+
+def test_local_model_paths_cannot_override_the_pinned_bf16_pair(tmp_path):
+    local = tmp_path / "config.local.yaml"
+    local.write_text(
+        "qwentts:\n"
+        "  talker_model: C:/custom/other-talker.gguf\n"
+        "  codec_model: C:/custom/other-codec.gguf\n"
+        "  active_model: q8\n",
+        encoding="utf-8",
+    )
+    talker, codec = load_config(local).qwentts_models()
+    assert talker.name == "qwen-talker-1.7b-base-BF16.gguf"
+    assert codec.name == "qwen-tokenizer-12hz-BF16.gguf"
+    assert talker.parent == codec.parent == ROOT / "runtime" / "qwentts" / "models"
 
 
 def test_legacy_runtime_settings_are_migrated_to_real_qwentts_controls(tmp_path):

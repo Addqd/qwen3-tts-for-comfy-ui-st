@@ -41,15 +41,12 @@ def merge_pronunciation(*values: Any) -> dict[str, str]:
 
 
 def apply_pronunciation(text: str, dictionary: Mapping[str, str]) -> tuple[str, int]:
-    result = text
-    count = 0
-    for source in sorted(dictionary, key=len, reverse=True):
-        replacement = dictionary[source]
-        result, changed = re.subn(
-            re.escape(source), lambda _match, literal=replacement: literal, result, flags=re.I
-        )
-        count += changed
-    return result, count
+    if not dictionary:
+        return text, 0
+    sources = sorted(dictionary, key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(source) for source in sources), re.I)
+    replacements = {source.casefold(): replacement for source, replacement in dictionary.items()}
+    return pattern.subn(lambda match: replacements[match.group(0).casefold()], text)
 
 
 def split_pronunciation_spans(text: str, dictionary: Mapping[str, str]) -> tuple[list[PronunciationSpan], int]:

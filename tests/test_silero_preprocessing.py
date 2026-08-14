@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,9 +15,12 @@ from qwen3_tts_st.service import TTSService
 from qwen3_tts_st.silero_preprocessing import SileroPreprocessingError, SileroPreprocessor, format_stress_markers
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def test_stress_marker_formats_and_yo():
     source = "молок+о, Л+ёва, уж+е"
-    assert format_stress_markers(source, "plus") == "молок+о, Лёва, уж+е"
+    assert format_stress_markers(source, "plus") == "молок+о, Л+ёва, уж+е"
     assert format_stress_markers(source, "acute") == "молоко́, Лёва, уже́"
     assert format_stress_markers(source, "apostrophe") == "молоко', Лёва, уже'"
 
@@ -38,7 +44,7 @@ def test_silero_components_are_independent(monkeypatch, tmp_path, text_enhanceme
             return f"TE[{text}]"
 
     monkeypatch.setattr(runtime, "_load_te", lambda: TE())
-    monkeypatch.setattr(runtime, "_load_stress", lambda: lambda text: text.replace("я", "+я"))
+    monkeypatch.setattr(runtime, "_load_stress", lambda: lambda text, **_kwargs: text.replace("я", "+я"))
     result, _ = runtime.process("я hello", text_enhancement, auto_stress, "plus")
     assert result == expected
 
@@ -68,7 +74,10 @@ async def test_manual_pronunciation_is_protected_and_request_override_wins(tmp_p
         "pronunciation_defaults": {"Qwen": "default"},
     })
 
+    calls = []
+
     def automatic(text, *_settings):
+        calls.append((text, _settings[-1]))
         return f"AUTO[{text}]", {"stress_seconds": 0.01, "text_enhancement_seconds": 0.02}
 
     monkeypatch.setattr(service.silero, "process", automatic)
@@ -78,11 +87,72 @@ async def test_manual_pronunciation_is_protected_and_request_override_wins(tmp_p
         russian_normalization=None,
     )
     prepared, replacements, _, stress_seconds, te_seconds = await service._prepare_text(request, service.settings.current())
-    assert prepared == r"AUTO[До ]request\1AUTO[ after]"
+    assert prepared == r"AUTO[До request\1 after]"
     assert replacements == 1
-    assert stress_seconds == pytest.approx(0.02)
-    assert te_seconds == pytest.approx(0.04)
+    assert calls == [("До Qwen after", ["Qwen"])]
+    assert stress_seconds == pytest.approx(0.01)
+    assert te_seconds == pytest.approx(0.02)
     await service.client.aclose()
+
+
+def test_whole_context_te_preserves_manual_terms_and_stress_ignores_them(monkeypatch, tmp_path):
+    runtime = SileroPreprocessor(tmp_path / "unused.json")
+    calls = {"te": [], "stress": []}
+
+    class TE:
+        @staticmethod
+        def enhance_text(text, language):
+            calls["te"].append((text, language))
+            return text.replace("Qwen", "changed")
+
+    def stress(text, **kwargs):
+        calls["stress"].append((text, kwargs["words_to_ignore"]))
+        return text.replace("текст", "т+екст")
+
+    monkeypatch.setattr(runtime, "_load_te", lambda: TE())
+    monkeypatch.setattr(runtime, "_load_stress", lambda: stress)
+    result, _ = runtime.process("До Qwen идёт текст", "silero", "silero", "plus", ["Qwen"])
+    assert result == "До Qwen идёт т+екст"
+    assert calls["te"] == [("До Qwen идёт текст", "ru")]
+    assert calls["stress"] == [("До Qwen идёт текст", ["qwen"])]
+
+
+def test_provisioned_catalogue_and_model_digests_are_verified(tmp_path):
+    catalogue = tmp_path / "models.yml"
+    te_model = tmp_path / "te.pt"
+    catalogue.write_bytes(b"catalogue")
+    te_model.write_bytes(b"te-model")
+    catalogue_hash = hashlib.sha256(catalogue.read_bytes()).hexdigest()
+    te_hash = hashlib.sha256(te_model.read_bytes()).hexdigest()
+    provenance = tmp_path / "silero-runtime.json"
+    provenance.write_text(json.dumps({
+        "schema": 1,
+        "catalogue": {"revision": "pinned", "sha256": catalogue_hash},
+        "text_enhancement_model": {"sha256": te_hash},
+    }), encoding="utf-8")
+    state = tmp_path / "provisioned.json"
+    state.write_text(json.dumps({
+        "schema": 2,
+        "catalogue": str(catalogue),
+        "catalogue_revision": "pinned",
+        "catalogue_sha256": catalogue_hash,
+        "te_model": str(te_model),
+        "te_model_sha256": te_hash,
+        "model_files": [str(catalogue), str(te_model)],
+        "asset_sha256": {str(catalogue): catalogue_hash, str(te_model): te_hash},
+    }), encoding="utf-8")
+    SileroPreprocessor(state, provenance)._require_provisioned()
+    catalogue.write_bytes(b"tampered")
+    with pytest.raises(SileroPreprocessingError, match="integrity validation failed"):
+        SileroPreprocessor(state, provenance)._require_provisioned()
+
+
+def test_silero_catalogue_is_commit_pinned_with_known_digest():
+    provenance = json.loads((ROOT / "config" / "silero-runtime.json").read_text(encoding="utf-8"))
+    catalogue = provenance["catalogue"]
+    assert catalogue["revision"] == "d9355348e2781dc8fa25a135d1602c530afae24c"
+    assert catalogue["revision"] in catalogue["url"]
+    assert catalogue["sha256"] == "64ccc436c72fd8c538e1a37de00301cc164a82c3d8ef0356532fe4c662ed1aa7"
 
 
 def test_runtime_settings_defaults_persistence_and_old_file_compatibility(tmp_path):

@@ -132,12 +132,17 @@ try {
     if (-not $EngineProcess -or -not $RunnerProcess) {
         throw "The qwentts.cpp engine or its runner could not be verified for session supervision."
     }
-    $SupervisorProcess = Start-OrJoin-ProjectSession -OwnerName "combined launcher" -MonitorOwner -Components @(
-        @{ name = "facade"; pid = $BackendProcess.Id },
-        @{ name = "qwentts runner"; pid = $RunnerProcess.Id },
-        @{ name = "qwentts.cpp"; pid = $EngineProcess.Id },
-        @{ name = "ComfyUI"; pid = $ComfyProcess.Id }
-    )
+    $SessionParameters = @{
+        OwnerName = "combined launcher"
+        Components = @(
+            @{ name = "facade"; pid = $BackendProcess.Id },
+            @{ name = "qwentts runner"; pid = $RunnerProcess.Id },
+            @{ name = "qwentts.cpp"; pid = $EngineProcess.Id },
+            @{ name = "ComfyUI"; pid = $ComfyProcess.Id }
+        )
+    }
+    if ($WaitForComfyUIExit) { $SessionParameters.MonitorOwner = $true }
+    $SupervisorProcess = Start-OrJoin-ProjectSession @SessionParameters
     Write-Host "Project session supervisor: PID $($SupervisorProcess.Id)"
 
     if ($WaitForComfyUIExit) {

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 from pathlib import Path
 import re
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 
 _STRESS_MARKER = re.compile(r"\+([аеёиоуыэюяАЕЁИОУЫЭЮЯ])([\u0301']?)")
@@ -22,30 +23,42 @@ def format_stress_markers(text: str, stress_format: str) -> str:
 
     def replace(match: re.Match[str]) -> str:
         vowel = match.group(1)
-        if vowel.casefold() == "ё":
-            return vowel
         if stress_format == "plus":
             return "+" + vowel
+        if vowel.casefold() == "ё":
+            return vowel
         return vowel + ("\u0301" if stress_format == "acute" else "'")
 
     return _STRESS_MARKER.sub(replace, text)
 
 
 class SileroPreprocessor:
-    def __init__(self, provision_state: Path):
+    def __init__(self, provision_state: Path, provenance_path: Path | None = None):
         self.provision_state = provision_state
+        self.provenance_path = provenance_path or Path(__file__).resolve().parents[2] / "config" / "silero-runtime.json"
         self._lock = threading.Lock()
         self._stress: Callable[[str], str] | None = None
         self._te: Any = None
         self._stress_loaded = False
         self._te_loaded = False
+        self._provision_verified = False
         self._last_stress_seconds = 0.0
         self._last_te_seconds = 0.0
 
     def _require_provisioned(self) -> None:
+        if self._provision_verified:
+            return
         try:
             state = json.loads(self.provision_state.read_text(encoding="utf-8-sig"))
+            provenance = json.loads(self.provenance_path.read_text(encoding="utf-8-sig"))
+            if state.get("schema") != 2 or provenance.get("schema") != 1:
+                raise ValueError("unsupported Silero provenance schema")
             files = [Path(item) for item in state["model_files"]]
+            asset_sha256 = state["asset_sha256"]
+            catalogue = Path(state["catalogue"])
+            te_model = Path(state["te_model"])
+            expected_catalogue = provenance["catalogue"]
+            expected_te = provenance["text_enhancement_model"]
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise SileroPreprocessingError(
                 "Silero preprocessing is not provisioned; run .\\scripts\\install.ps1"
@@ -55,6 +68,23 @@ class SileroPreprocessor:
             raise SileroPreprocessingError(
                 "Silero preprocessing assets are missing; run .\\scripts\\install.ps1"
             )
+        try:
+            if (
+                state["catalogue_revision"] != expected_catalogue["revision"]
+                or state["catalogue_sha256"] != expected_catalogue["sha256"]
+                or hashlib.sha256(catalogue.read_bytes()).hexdigest() != expected_catalogue["sha256"]
+                or state["te_model_sha256"] != expected_te["sha256"]
+                or hashlib.sha256(te_model.read_bytes()).hexdigest() != expected_te["sha256"]
+            ):
+                raise ValueError("pinned Silero provenance mismatch")
+            for path in files:
+                if hashlib.sha256(path.read_bytes()).hexdigest() != asset_sha256[str(path)]:
+                    raise ValueError(f"Silero asset digest mismatch: {path}")
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise SileroPreprocessingError(
+                "Silero preprocessing integrity validation failed; run .\\scripts\\install.ps1"
+            ) from exc
+        self._provision_verified = True
 
     @staticmethod
     def _configure_torch() -> Any:
@@ -95,14 +125,28 @@ class SileroPreprocessor:
             raise SileroPreprocessingError(f"{component} returned invalid text")
         return result
 
-    def process(self, text: str, text_enhancement: str, auto_stress: str, stress_format: str) -> tuple[str, dict[str, float]]:
+    def process(
+        self,
+        text: str,
+        text_enhancement: str,
+        auto_stress: str,
+        stress_format: str,
+        protected_terms: Sequence[str] | None = None,
+    ) -> tuple[str, dict[str, float]]:
         value = text
+        protected = [term for term in (protected_terms or ()) if term]
         te_seconds = 0.0
         stress_seconds = 0.0
         if text_enhancement == "silero" and value.strip():
             started = time.perf_counter()
             try:
-                value = self._validated(self._load_te().enhance_text(value, "ru"), "Silero Text Enhancement", value)
+                enhanced = self._validated(self._load_te().enhance_text(value, "ru"), "Silero Text Enhancement", value)
+                if all(
+                    len(re.findall(re.escape(term), enhanced, flags=re.I))
+                    >= len(re.findall(re.escape(term), value, flags=re.I))
+                    for term in protected
+                ):
+                    value = enhanced
             except SileroPreprocessingError:
                 raise
             except Exception as exc:
@@ -114,7 +158,16 @@ class SileroPreprocessor:
         if auto_stress == "silero" and value.strip():
             started = time.perf_counter()
             try:
-                stressed = self._validated(self._load_stress()(value), "Silero Stress", value)
+                words_to_ignore = sorted({
+                    word.casefold()
+                    for term in protected
+                    for word in re.findall(r"[A-Za-zА-Яа-яЁё]+", term)
+                })
+                stressed = self._validated(
+                    self._load_stress()(value, words_to_ignore=words_to_ignore or None),
+                    "Silero Stress",
+                    value,
+                )
                 value = format_stress_markers(stressed, stress_format)
             except SileroPreprocessingError:
                 raise

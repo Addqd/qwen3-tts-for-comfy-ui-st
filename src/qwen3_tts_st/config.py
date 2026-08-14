@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,12 @@ import yaml
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+QWENTTS_MODEL_DIR = PROJECT_ROOT / "runtime" / "qwentts" / "models"
+QWENTTS_MANIFEST = PROJECT_ROOT / "config" / "qwentts-runtime.json"
+QWENTTS_BF16_FILES = (
+    "qwen-talker-1.7b-base-BF16.gguf",
+    "qwen-tokenizer-12hz-BF16.gguf",
+)
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -42,11 +49,14 @@ class AppConfig:
         return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
 
     def qwentts_models(self) -> tuple[Path, Path]:
-        talker = self.get("qwentts.talker_model")
-        codec = self.get("qwentts.codec_model")
-        if not talker or not codec:
-            raise ValueError("The fixed BF16 qwentts model pair is incomplete")
-        return self.path("qwentts.talker_model", ""), self.path("qwentts.codec_model", "")
+        try:
+            manifest = json.loads(QWENTTS_MANIFEST.read_text(encoding="utf-8"))
+            files = set(manifest["models"]["files"])
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("The pinned qwentts runtime manifest is invalid") from exc
+        if files != set(QWENTTS_BF16_FILES):
+            raise ValueError("The pinned qwentts runtime manifest must contain only the production BF16 pair")
+        return tuple(QWENTTS_MODEL_DIR / name for name in QWENTTS_BF16_FILES)
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

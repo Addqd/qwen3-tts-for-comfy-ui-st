@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from .normalization import merge_pronunciation, normalize_russian_text, split_pronunciation_spans
+from .normalization import apply_pronunciation, merge_pronunciation, normalize_russian_text, split_pronunciation_spans
 from .preprocess import preprocess
 from .runtime_settings import RuntimeSettingsStore
 from .silero_preprocessing import SileroPreprocessor
@@ -158,31 +158,27 @@ class TTSService:
     async def _prepare_text(self, request: Any, current: dict[str, Any]) -> tuple[str, int, str, float, float]:
         prepared = preprocess(request.input, dict(self.config.get("preprocessing", {}) or {}))
         pronunciation = merge_pronunciation(current["pronunciation_defaults"], request.pronunciation_overrides)
-        spans, replacements = split_pronunciation_spans(prepared, pronunciation)
+        _, expected_replacements = split_pronunciation_spans(prepared, pronunciation)
         automatic_enabled = current["auto_stress"] != "off" or current["text_enhancement"] != "off"
-        pieces: list[str] = []
         stress_seconds = 0.0
         te_seconds = 0.0
-        for span in spans:
-            if span.replacement is not None:
-                pieces.append(span.replacement)
-                continue
-            if not automatic_enabled:
-                pieces.append(span.text)
-                continue
-            transformed, timings = await asyncio.to_thread(
+        if automatic_enabled:
+            prepared, timings = await asyncio.to_thread(
                 self.silero.process,
-                span.text,
+                prepared,
                 current["text_enhancement"],
                 current["auto_stress"],
                 current["stress_format"],
+                list(pronunciation),
             )
-            pieces.append(transformed)
-            stress_seconds += timings["stress_seconds"]
-            te_seconds += timings["text_enhancement_seconds"]
+            stress_seconds = timings["stress_seconds"]
+            te_seconds = timings["text_enhancement_seconds"]
+        prepared, replacements = apply_pronunciation(prepared, pronunciation)
+        if replacements != expected_replacements:
+            raise ValueError("Manual pronunciation terms changed during automatic preprocessing")
         self.silero.record_timings(stress_seconds, te_seconds)
         normalization = request.russian_normalization or current["russian_normalization"]
-        prepared = normalize_russian_text("".join(pieces), normalization)
+        prepared = normalize_russian_text(prepared, normalization)
         if not prepared:
             raise ValueError("No pronounceable text remains after preprocessing")
         return prepared, replacements, normalization, stress_seconds, te_seconds

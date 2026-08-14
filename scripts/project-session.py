@@ -25,6 +25,7 @@ SYNCHRONIZE = 0x00100000
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 JOB_OBJECT_ASSIGN_PROCESS = 0x0001
+JOB_OBJECT_TERMINATE = 0x0008
 
 
 class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
@@ -112,7 +113,7 @@ def _process_record(pid: int, name: str) -> dict[str, object]:
 def _same_process(record: dict[str, object]) -> bool:
     try:
         current = _process_record(int(record["pid"]), str(record.get("name", "process")))
-    except OSError:
+    except (OSError, KeyError, TypeError, ValueError):
         return False
     return (
         current["creation_filetime"] == record.get("creation_filetime")
@@ -135,6 +136,30 @@ def _assign(job: int, record: dict[str, object]) -> None:
         kernel32.CloseHandle(handle)
 
 
+def _preflight_assignments(records: list[dict[str, object]]) -> None:
+    for record in records:
+        handle = _open_process(int(record["pid"]), assign=True)
+        kernel32.CloseHandle(handle)
+
+
+def _arm_job(job: int) -> None:
+    limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not kernel32.SetInformationJobObject(
+        job,
+        JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+        ctypes.byref(limits),
+        ctypes.sizeof(limits),
+    ):
+        raise _win_error("Unable to configure project Job Object cleanup")
+
+
+def _assign_initial_components(job: int, components: list[dict[str, object]]) -> None:
+    for record in components:
+        _assign(job, record)
+    _arm_job(job)
+
+
 def _read_request(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(value, dict):
@@ -144,6 +169,36 @@ def _read_request(path: Path) -> dict[str, object]:
 
 def _records(request: dict[str, object], key: str) -> list[dict[str, object]]:
     return [_process_record(int(item["pid"]), str(item["name"])) for item in request.get(key, [])]
+
+
+def _valid_record(record: object) -> bool:
+    return (
+        isinstance(record, dict)
+        and isinstance(record.get("pid"), int)
+        and isinstance(record.get("creation_filetime"), int)
+        and isinstance(record.get("executable"), str)
+        and bool(record["executable"])
+    )
+
+
+def _load_session_state(state_path: Path) -> dict[str, object] | None:
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8-sig"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(state, dict)
+        or state.get("schema") != 1
+        or not isinstance(state.get("session_id"), str)
+        or not isinstance(state.get("job_name"), str)
+        or not _valid_record(state.get("supervisor"))
+        or not isinstance(state.get("owners"), list)
+        or not isinstance(state.get("components"), list)
+        or any(not _valid_record(record) for record in state["owners"])
+        or any(not _valid_record(record) for record in state["components"])
+    ):
+        return None
+    return state
 
 
 def _cleanup(project_root: Path, state_path: Path, session_id: str, job: int, components: list[dict[str, object]]) -> None:
@@ -186,14 +241,10 @@ def supervise(project_root: Path, request_path: Path, state_path: Path) -> int:
     if not job:
         raise _win_error("Unable to create the project Job Object")
     try:
-        limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not kernel32.SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS, ctypes.byref(limits), ctypes.sizeof(limits)):
-            raise _win_error("Unable to configure project Job Object cleanup")
         owners = _records(request, "owners")
         components = _records(request, "components")
-        for record in components:
-            _assign(job, record)
+        _preflight_assignments(components)
+        _assign_initial_components(job, components)
         state: dict[str, object] = {
             "schema": 1,
             "session_id": session_id,
@@ -211,6 +262,9 @@ def supervise(project_root: Path, request_path: Path, state_path: Path) -> int:
                 if latest.get("session_id") == session_id:
                     owners = latest.get("owners", owners)
                     components = latest.get("components", components)
+                    if latest.get("stop_requested"):
+                        reason = str(latest.get("stop_reason") or "controlled teardown requested")
+                        break
             except (OSError, ValueError, json.JSONDecodeError):
                 pass
             missing_owner = next((record for record in owners if not _same_process(record)), None)
@@ -234,28 +288,46 @@ def supervise(project_root: Path, request_path: Path, state_path: Path) -> int:
 def attach(request_path: Path, state_path: Path) -> int:
     if not state_path.exists():
         return 3
-    state = json.loads(state_path.read_text(encoding="utf-8-sig"))
-    if not _same_process(state.get("supervisor", {})):
+    state = _load_session_state(state_path)
+    if state is None or not _same_process(state["supervisor"]):
         return 3
-    if any(not _same_process(record) for record in state.get("components", [])):
+    if any(not _same_process(record) for record in state["components"]):
         return 4
     request = _read_request(request_path)
     request_path.unlink(missing_ok=True)
-    job = kernel32.OpenJobObjectW(JOB_OBJECT_ASSIGN_PROCESS, False, str(state["job_name"]))
+    requested_components = _records(request, "components")
+    requested_owners = _records(request, "owners")
+    _preflight_assignments(requested_components)
+    job = kernel32.OpenJobObjectW(JOB_OBJECT_ASSIGN_PROCESS | JOB_OBJECT_TERMINATE, False, str(state["job_name"]))
     if not job:
-        return 3
+        return 5
     try:
-        owners = list(state.get("owners", []))
-        components = list(state.get("components", []))
+        owners = list(state["owners"])
+        components = list(state["components"])
         known = {(int(item["pid"]), int(item["creation_filetime"])) for item in components}
-        for record in _records(request, "components"):
-            identity = (int(record["pid"]), int(record["creation_filetime"]))
-            if identity not in known:
-                _assign(job, record)
-                components.append(record)
-                known.add(identity)
+        assigned: list[dict[str, object]] = []
+        try:
+            for record in requested_components:
+                identity = (int(record["pid"]), int(record["creation_filetime"]))
+                if identity not in known:
+                    _assign(job, record)
+                    components.append(record)
+                    assigned.append(record)
+                    known.add(identity)
+                    state["components"] = components
+                    _atomic_write(state_path, state)
+        except Exception:
+            if assigned:
+                state["components"] = components
+                state["stop_requested"] = True
+                state["stop_reason"] = "attach failed after assigning components"
+                try:
+                    _atomic_write(state_path, state)
+                except OSError:
+                    kernel32.TerminateJobObject(job, 1)
+            raise
         owner_known = {(int(item["pid"]), int(item["creation_filetime"])) for item in owners}
-        for record in _records(request, "owners"):
+        for record in requested_owners:
             identity = (int(record["pid"]), int(record["creation_filetime"]))
             if identity not in owner_known:
                 owners.append(record)
