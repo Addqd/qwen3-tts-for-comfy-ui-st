@@ -10,11 +10,13 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 QWENTTS_MODEL_DIR = PROJECT_ROOT / "runtime" / "qwentts" / "models"
+QWENTTS_BIN_DIR = PROJECT_ROOT / "runtime" / "qwentts" / "bin"
 QWENTTS_MANIFEST = PROJECT_ROOT / "config" / "qwentts-runtime.json"
 QWENTTS_BF16_FILES = (
     "qwen-talker-1.7b-base-BF16.gguf",
     "qwen-tokenizer-12hz-BF16.gguf",
 )
+QWENTTS_EXECUTABLE_FILES = ("tts-server.exe", "qwen-codec.exe")
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -57,6 +59,16 @@ class AppConfig:
         if files != set(QWENTTS_BF16_FILES):
             raise ValueError("The pinned qwentts runtime manifest must contain only the production BF16 pair")
         return tuple(QWENTTS_MODEL_DIR / name for name in QWENTTS_BF16_FILES)
+
+    def qwentts_executables(self) -> tuple[Path, Path]:
+        try:
+            manifest = json.loads(QWENTTS_MANIFEST.read_text(encoding="utf-8"))
+            files = manifest["files"]
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("The pinned qwentts runtime manifest is invalid") from exc
+        if any(name not in files for name in QWENTTS_EXECUTABLE_FILES):
+            raise ValueError("The pinned qwentts runtime manifest is missing a production executable")
+        return tuple(QWENTTS_BIN_DIR / name for name in QWENTTS_EXECUTABLE_FILES)
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

@@ -5,8 +5,6 @@ server:
 qwentts:
   host: 127.0.0.1
   port: 8030
-  executable: runtime/qwentts/bin/tts-server.exe
-  codec_executable: runtime/qwentts/bin/qwen-codec.exe
   model_id: tts-1-ru
   language: Russian
   backend: CUDA0

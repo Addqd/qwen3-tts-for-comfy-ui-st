@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,7 +27,11 @@ SYNCHRONIZE = 0x00100000
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 JOB_OBJECT_ASSIGN_PROCESS = 0x0001
+JOB_OBJECT_QUERY = 0x0004
 JOB_OBJECT_TERMINATE = 0x0008
+WAIT_OBJECT_0 = 0x00000000
+WAIT_ABANDONED = 0x00000080
+WAIT_TIMEOUT = 0x00000102
 
 
 class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
@@ -68,6 +74,8 @@ kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctyp
 kernel32.SetInformationJobObject.restype = wintypes.BOOL
 kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
 kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+kernel32.IsProcessInJob.restype = wintypes.BOOL
 kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
 kernel32.TerminateJobObject.restype = wintypes.BOOL
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -78,10 +86,36 @@ kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
 kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
 kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+kernel32.CreateMutexW.restype = wintypes.HANDLE
+kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+kernel32.WaitForSingleObject.restype = wintypes.DWORD
+kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+kernel32.ReleaseMutex.restype = wintypes.BOOL
 
 
 def _win_error(message: str) -> OSError:
     return OSError(ctypes.get_last_error(), message)
+
+
+@contextmanager
+def _session_mutex(state_path: Path, timeout_seconds: int = 30):
+    identity = hashlib.sha256(str(state_path.resolve()).casefold().encode("utf-8")).hexdigest()[:24]
+    handle = kernel32.CreateMutexW(None, False, f"Local\\Qwen3TTS-State-{identity}")
+    if not handle:
+        raise _win_error("Unable to create the project-session mutex")
+    try:
+        result = kernel32.WaitForSingleObject(handle, timeout_seconds * 1000)
+        if result not in (WAIT_OBJECT_0, WAIT_ABANDONED):
+            if result == WAIT_TIMEOUT:
+                raise TimeoutError("Timed out waiting for the project-session mutation lock")
+            raise _win_error("Unable to acquire the project-session mutex")
+        try:
+            yield
+        finally:
+            kernel32.ReleaseMutex(handle)
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _open_process(pid: int, assign: bool = False) -> int:
@@ -130,6 +164,11 @@ def _atomic_write(path: Path, value: dict[str, object]) -> None:
 def _assign(job: int, record: dict[str, object]) -> None:
     handle = _open_process(int(record["pid"]), assign=True)
     try:
+        already_assigned = wintypes.BOOL()
+        if not kernel32.IsProcessInJob(handle, job, ctypes.byref(already_assigned)):
+            raise _win_error(f"Unable to inspect Job Object membership for {record['name']} PID {record['pid']}")
+        if already_assigned.value:
+            return
         if not kernel32.AssignProcessToJobObject(job, handle):
             raise _win_error(f"Unable to assign {record['name']} PID {record['pid']} to the project Job Object")
     finally:
@@ -223,52 +262,65 @@ def _cleanup(project_root: Path, state_path: Path, session_id: str, job: int, co
     if any(_same_process(record) for record in components):
         kernel32.TerminateJobObject(job, 1)
     try:
-        state = json.loads(state_path.read_text(encoding="utf-8-sig"))
-        if state.get("session_id") == session_id:
-            state_path.unlink(missing_ok=True)
-            for name in ("server.json", "qwentts.json", "comfyui.json"):
-                (state_path.parent / name).unlink(missing_ok=True)
-    except (OSError, ValueError, json.JSONDecodeError):
+        with _session_mutex(state_path):
+            state = json.loads(state_path.read_text(encoding="utf-8-sig"))
+            if state.get("session_id") == session_id:
+                state_path.unlink(missing_ok=True)
+                for name in ("server.json", "qwentts.json", "comfyui.json"):
+                    (state_path.parent / name).unlink(missing_ok=True)
+    except (OSError, ValueError, json.JSONDecodeError, TimeoutError):
         pass
 
 
-def supervise(project_root: Path, request_path: Path, state_path: Path) -> int:
-    request = _read_request(request_path)
-    request_path.unlink(missing_ok=True)
-    session_id = uuid4().hex
-    job_name = f"Local\\Qwen3TTS-{session_id}"
-    job = kernel32.CreateJobObjectW(None, job_name)
-    if not job:
-        raise _win_error("Unable to create the project Job Object")
+def supervise(project_root: Path, request_path: Path, state_path: Path, lock_held: bool = False) -> int:
+    mutation = nullcontext() if lock_held else _session_mutex(state_path)
+    with mutation:
+        request = _read_request(request_path)
+        request_path.unlink(missing_ok=True)
+        existing = _load_session_state(state_path) if state_path.exists() else None
+        if existing is not None and _same_process(existing["supervisor"]):
+            return 6
+        session_id = uuid4().hex
+        job_name = f"Local\\Qwen3TTS-{session_id}"
+        job = kernel32.CreateJobObjectW(None, job_name)
+        if not job:
+            raise _win_error("Unable to create the project Job Object")
+        try:
+            owners = _records(request, "owners")
+            components = _records(request, "components")
+            _preflight_assignments(components)
+            _assign_initial_components(job, components)
+            state: dict[str, object] = {
+                "schema": 1,
+                "session_id": session_id,
+                "job_name": job_name,
+                "supervisor": _process_record(os.getpid(), "supervisor"),
+                "owners": owners,
+                "components": components,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _atomic_write(state_path, state)
+        except Exception:
+            kernel32.CloseHandle(job)
+            raise
     try:
-        owners = _records(request, "owners")
-        components = _records(request, "components")
-        _preflight_assignments(components)
-        _assign_initial_components(job, components)
-        state: dict[str, object] = {
-            "schema": 1,
-            "session_id": session_id,
-            "job_name": job_name,
-            "supervisor": _process_record(os.getpid(), "supervisor"),
-            "owners": owners,
-            "components": components,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        _atomic_write(state_path, state)
         reason = "unknown"
         while True:
+            missing_owner = None
+            missing_component = None
             try:
-                latest = json.loads(state_path.read_text(encoding="utf-8-sig"))
-                if latest.get("session_id") == session_id:
-                    owners = latest.get("owners", owners)
-                    components = latest.get("components", components)
-                    if latest.get("stop_requested"):
-                        reason = str(latest.get("stop_reason") or "controlled teardown requested")
-                        break
-            except (OSError, ValueError, json.JSONDecodeError):
+                with _session_mutex(state_path):
+                    latest = json.loads(state_path.read_text(encoding="utf-8-sig"))
+                    if latest.get("session_id") == session_id:
+                        owners = latest.get("owners", owners)
+                        components = latest.get("components", components)
+                        if latest.get("stop_requested"):
+                            reason = str(latest.get("stop_reason") or "controlled teardown requested")
+                            break
+                    missing_owner = next((record for record in owners if not _same_process(record)), None)
+                    missing_component = next((record for record in components if not _same_process(record)), None)
+            except (OSError, ValueError, json.JSONDecodeError, TimeoutError):
                 pass
-            missing_owner = next((record for record in owners if not _same_process(record)), None)
-            missing_component = next((record for record in components if not _same_process(record)), None)
             if missing_owner:
                 reason = f"owner {missing_owner['name']} closed"
                 break
@@ -285,7 +337,7 @@ def supervise(project_root: Path, request_path: Path, state_path: Path) -> int:
         kernel32.CloseHandle(job)
 
 
-def attach(request_path: Path, state_path: Path) -> int:
+def _attach_locked(request_path: Path, state_path: Path) -> int:
     if not state_path.exists():
         return 3
     state = _load_session_state(state_path)
@@ -298,7 +350,7 @@ def attach(request_path: Path, state_path: Path) -> int:
     requested_components = _records(request, "components")
     requested_owners = _records(request, "owners")
     _preflight_assignments(requested_components)
-    job = kernel32.OpenJobObjectW(JOB_OBJECT_ASSIGN_PROCESS | JOB_OBJECT_TERMINATE, False, str(state["job_name"]))
+    job = kernel32.OpenJobObjectW(JOB_OBJECT_ASSIGN_PROCESS | JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE, False, str(state["job_name"]))
     if not job:
         return 5
     try:
@@ -340,12 +392,103 @@ def attach(request_path: Path, state_path: Path) -> int:
         kernel32.CloseHandle(job)
 
 
+def attach(request_path: Path, state_path: Path) -> int:
+    with _session_mutex(state_path):
+        return _attach_locked(request_path, state_path)
+
+
+def ensure(project_root: Path, request_path: Path, state_path: Path) -> int:
+    with _session_mutex(state_path):
+        state = _load_session_state(state_path) if state_path.exists() else None
+        if state is not None and _same_process(state["supervisor"]):
+            return _attach_locked(request_path, state_path)
+        request = _read_request(request_path)
+        if request.get("components"):
+            return 7
+        state_path.unlink(missing_ok=True)
+        logs = project_root / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable, str(Path(__file__).resolve()), "supervise",
+            "--project-root", str(project_root), "--request", str(request_path),
+            "--state", str(state_path), "--lock-held",
+        ]
+        with (logs / "project-session.out.log").open("ab", buffering=0) as stdout, \
+             (logs / "project-session.err.log").open("ab", buffering=0) as stderr:
+            supervisor = subprocess.Popen(command, cwd=project_root, stdout=stdout, stderr=stderr)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            state = _load_session_state(state_path) if state_path.exists() else None
+            if state is not None and _same_process(state["supervisor"]):
+                return 0
+            if supervisor.poll() is not None:
+                return supervisor.returncode or 1
+            time.sleep(0.1)
+        state = _load_session_state(state_path) if state_path.exists() else None
+        if state is not None and _same_process(state["supervisor"]):
+            return 0
+        supervisor.terminate()
+        supervisor.wait(timeout=5)
+        return 8
+
+
+def release_owner(request_path: Path, state_path: Path) -> int:
+    with _session_mutex(state_path):
+        state = _load_session_state(state_path) if state_path.exists() else None
+        if state is None or not _same_process(state["supervisor"]):
+            return 3
+        request = _read_request(request_path)
+        request_path.unlink(missing_ok=True)
+        releasing = _records(request, "owners")
+        identities = {(int(item["pid"]), int(item["creation_filetime"])) for item in releasing}
+        state["owners"] = [
+            item for item in state["owners"]
+            if (int(item["pid"]), int(item["creation_filetime"])) not in identities
+        ]
+        _atomic_write(state_path, state)
+        return 0
+
+
+def release_component(request_path: Path, state_path: Path) -> int:
+    with _session_mutex(state_path):
+        state = _load_session_state(state_path) if state_path.exists() else None
+        if state is None or not _same_process(state["supervisor"]):
+            return 3
+        request = _read_request(request_path)
+        request_path.unlink(missing_ok=True)
+        releasing = _records(request, "components")
+        identities = {(int(item["pid"]), int(item["creation_filetime"])) for item in releasing}
+        state["components"] = [
+            item for item in state["components"]
+            if (int(item["pid"]), int(item["creation_filetime"])) not in identities
+        ]
+        _atomic_write(state_path, state)
+        return 0
+
+
+def request_stop(request_path: Path, state_path: Path) -> int:
+    with _session_mutex(state_path):
+        state = _load_session_state(state_path) if state_path.exists() else None
+        if state is None or not _same_process(state["supervisor"]):
+            return 3
+        request = _read_request(request_path)
+        request_path.unlink(missing_ok=True)
+        expected_pid = request.get("supervisor_pid")
+        if expected_pid is not None and int(expected_pid) != int(state["supervisor"]["pid"]):
+            return 5
+        state["stop_requested"] = True
+        state["stop_reason"] = str(request.get("reason") or "controlled teardown requested")
+        _atomic_write(state_path, state)
+        return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Qwen3-TTS Windows project session supervisor")
-    parser.add_argument("mode", choices=("supervise", "attach"))
+    parser.add_argument("mode", choices=("supervise", "attach", "ensure", "release-owner", "release-component", "request-stop"))
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--request", required=True)
     parser.add_argument("--state", required=True)
+    parser.add_argument("--lock-held", action="store_true")
     args = parser.parse_args()
     root = Path(args.project_root).resolve()
     request = Path(args.request).resolve()
@@ -353,7 +496,15 @@ def main() -> int:
     state.parent.mkdir(parents=True, exist_ok=True)
     if args.mode == "attach":
         return attach(request, state)
-    return supervise(root, request, state)
+    if args.mode == "ensure":
+        return ensure(root, request, state)
+    if args.mode == "release-owner":
+        return release_owner(request, state)
+    if args.mode == "release-component":
+        return release_component(request, state)
+    if args.mode == "request-stop":
+        return request_stop(request, state)
+    return supervise(root, request, state, lock_held=args.lock_held)
 
 
 if __name__ == "__main__":

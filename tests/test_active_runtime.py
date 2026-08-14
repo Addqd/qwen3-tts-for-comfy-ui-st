@@ -65,6 +65,25 @@ def test_local_model_paths_cannot_override_the_pinned_bf16_pair(tmp_path):
     assert talker.parent == codec.parent == ROOT / "runtime" / "qwentts" / "models"
 
 
+def test_local_executable_paths_cannot_override_the_pinned_runtime(tmp_path):
+    local = tmp_path / "config.local.yaml"
+    local.write_text(
+        "qwentts:\n"
+        "  executable: C:/custom/tts-server.exe\n"
+        "  codec_executable: C:/custom/qwen-codec.exe\n",
+        encoding="utf-8",
+    )
+    server, codec = load_config(local).qwentts_executables()
+    assert server == ROOT / "runtime" / "qwentts" / "bin" / "tts-server.exe"
+    assert codec == ROOT / "runtime" / "qwentts" / "bin" / "qwen-codec.exe"
+    runner = (ROOT / "scripts" / "qwentts-runner.py").read_text(encoding="utf-8")
+    voices = (ROOT / "src" / "qwen3_tts_st" / "voices.py").read_text(encoding="utf-8")
+    assert "config.qwentts_executables()" in runner
+    assert "self.config.qwentts_executables()" in voices
+    assert 'path("qwentts.executable"' not in runner
+    assert 'path("qwentts.codec_executable"' not in voices
+
+
 def test_legacy_runtime_settings_are_migrated_to_real_qwentts_controls(tmp_path):
     config = load_config(ROOT / "config" / "config.example.yaml")
     config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")

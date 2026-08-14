@@ -117,6 +117,94 @@ def test_whole_context_te_preserves_manual_terms_and_stress_ignores_them(monkeyp
     assert calls["stress"] == [("До Qwen идёт текст", ["qwen"])]
 
 
+@pytest.mark.asyncio
+async def test_te_that_adds_a_protected_occurrence_is_rejected_without_request_failure(tmp_path, monkeypatch):
+    config = load_config()
+    config.data["voices"]["library_dir"] = str(tmp_path / "voices")
+    config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")
+    service = TTSService(config)
+    service.settings.update({
+        "russian_normalization": "off",
+        "auto_stress": "off",
+        "text_enhancement": "silero",
+        "pronunciation_defaults": {"Qwen": "куэн"},
+    })
+
+    class TE:
+        @staticmethod
+        def enhance_text(text, _language):
+            return f"{text} и Qwen"
+
+    monkeypatch.setattr(service.silero, "_load_te", lambda: TE())
+    request = SimpleNamespace(input="Qwen работает", pronunciation_overrides={}, russian_normalization=None)
+    prepared, replacements, *_rest = await service._prepare_text(request, service.settings.current())
+    assert prepared == "куэн работает"
+    assert replacements == 1
+    await service.client.aclose()
+
+
+def test_multiword_override_does_not_disable_stress_for_same_standalone_word(monkeypatch, tmp_path):
+    runtime = SileroPreprocessor(tmp_path / "unused.json")
+
+    def stress(text, **kwargs):
+        assert "старый" not in kwargs["words_to_ignore"]
+        assert "замок" not in kwargs["words_to_ignore"]
+        return text.replace("замок", "зам+ок")
+
+    monkeypatch.setattr(runtime, "_load_stress", lambda: stress)
+    result, _ = runtime.process("старый замок, а замок открыт", "off", "silero", "plus", ["старый замок"])
+    assert result == "старый замок, а зам+ок открыт"
+
+
+def _silero_assets(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
+    catalogue = tmp_path / "models.yml"
+    te_model = tmp_path / "te.pt"
+    stress_model = tmp_path / "accentor.pt"
+    for path, payload in ((catalogue, b"catalogue"), (te_model, b"te"), (stress_model, b"stress")):
+        path.write_bytes(payload)
+    digests = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in (catalogue, te_model, stress_model)}
+    provenance = tmp_path / "silero-runtime.json"
+    provenance.write_text(json.dumps({
+        "schema": 1,
+        "catalogue": {"revision": "pinned", "sha256": digests[str(catalogue)]},
+        "text_enhancement_model": {"sha256": digests[str(te_model)]},
+    }), encoding="utf-8")
+    state = tmp_path / "provisioned.json"
+    state.write_text(json.dumps({
+        "schema": 2,
+        "catalogue": str(catalogue),
+        "catalogue_revision": "pinned",
+        "catalogue_sha256": digests[str(catalogue)],
+        "te_model": str(te_model),
+        "te_model_sha256": digests[str(te_model)],
+        "model_files": [str(catalogue), str(te_model), str(stress_model)],
+        "asset_sha256": digests,
+    }), encoding="utf-8")
+    return state, provenance, catalogue, te_model, stress_model
+
+
+def test_stress_verification_does_not_depend_on_te_asset(tmp_path):
+    state, provenance, _catalogue, te_model, _stress_model = _silero_assets(tmp_path)
+    te_model.write_bytes(b"broken")
+    SileroPreprocessor(state, provenance)._require_provisioned("stress")
+
+
+def test_te_verification_does_not_depend_on_stress_asset(tmp_path):
+    state, provenance, _catalogue, _te_model, stress_model = _silero_assets(tmp_path)
+    stress_model.write_bytes(b"broken")
+    SileroPreprocessor(state, provenance)._require_provisioned("text_enhancement")
+
+
+def test_enabled_broken_silero_component_reports_its_own_error(tmp_path):
+    state, provenance, _catalogue, te_model, stress_model = _silero_assets(tmp_path)
+    te_model.write_bytes(b"broken")
+    with pytest.raises(SileroPreprocessingError, match="Silero Text Enhancement integrity"):
+        SileroPreprocessor(state, provenance)._require_provisioned("text_enhancement")
+    stress_model.write_bytes(b"broken")
+    with pytest.raises(SileroPreprocessingError, match="Silero Stress integrity"):
+        SileroPreprocessor(state, provenance)._require_provisioned("stress")
+
+
 def test_provisioned_catalogue_and_model_digests_are_verified(tmp_path):
     catalogue = tmp_path / "models.yml"
     te_model = tmp_path / "te.pt"
@@ -141,10 +229,10 @@ def test_provisioned_catalogue_and_model_digests_are_verified(tmp_path):
         "model_files": [str(catalogue), str(te_model)],
         "asset_sha256": {str(catalogue): catalogue_hash, str(te_model): te_hash},
     }), encoding="utf-8")
-    SileroPreprocessor(state, provenance)._require_provisioned()
+    SileroPreprocessor(state, provenance)._require_provisioned("text_enhancement")
     catalogue.write_bytes(b"tampered")
     with pytest.raises(SileroPreprocessingError, match="integrity validation failed"):
-        SileroPreprocessor(state, provenance)._require_provisioned()
+        SileroPreprocessor(state, provenance)._require_provisioned("text_enhancement")
 
 
 def test_silero_catalogue_is_commit_pinned_with_known_digest():

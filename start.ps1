@@ -27,10 +27,26 @@ foreach ($Port in @([int]$ConfigJson.public,[int]$ConfigJson.engine)) {
 }
 
 $RunnerScript = Join-Path $ProjectRoot "scripts\qwentts-runner.py"
+$SessionSupervisor = $null
+$StartupOwnerRegistered = $false
+$StartupComponentRegistered = $false
+if (-not $NoSessionSupervisor) {
+    $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "backend startup" -MonitorOwner -Components @()
+    $StartupOwnerRegistered = $true
+    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
+        @{ name = "backend startup launcher"; pid = $PID }
+    )
+    $StartupComponentRegistered = $true
+} elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
+    throw "NoSessionSupervisor requires an existing managed project session."
+}
 $PreviousInternal = $env:QWEN3_TTS_SESSION_INTERNAL
 $env:QWEN3_TTS_SESSION_INTERNAL = "1"
 $Runner = Start-Process -FilePath $Python -ArgumentList @($RunnerScript,"--config",$ConfigPath) -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
 try {
+    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
+        @{ name = "qwentts runner"; pid = $Runner.Id }
+    )
     $EngineDeadline = (Get-Date).AddSeconds($WaitSeconds)
     do {
         Start-Sleep -Milliseconds 500
@@ -53,6 +69,10 @@ try {
     $QwenState | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $QwenStatePath -Encoding UTF8
 
     $Facade = Start-Process -FilePath $Python -ArgumentList @("-m","qwen3_tts_st.cli","--config",$ConfigPath) -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
+    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
+        @{ name = "facade"; pid = $Facade.Id },
+        @{ name = "qwentts.cpp"; pid = $Engine.Id }
+    )
     if ($null -eq $PreviousInternal) { Remove-Item Env:QWEN3_TTS_SESSION_INTERNAL -ErrorAction SilentlyContinue } else { $env:QWEN3_TTS_SESSION_INTERNAL = $PreviousInternal }
     $PublicUrl = "http://127.0.0.1:$($ConfigJson.public)"
     $FacadeDeadline = (Get-Date).AddSeconds($WaitSeconds)
@@ -70,22 +90,25 @@ try {
         config = [IO.Path]::GetFullPath($ConfigPath)
     }
     $State | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StatePath -Encoding UTF8
-    if (-not $NoSessionSupervisor) {
-        $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "backend launcher" -Components @(
-            @{ name = "facade"; pid = $Facade.Id },
-            @{ name = "qwentts runner"; pid = $Runner.Id },
-            @{ name = "qwentts.cpp"; pid = $Engine.Id }
-        )
-        Write-Host "Project session supervisor: PID $($SessionSupervisor.Id)"
+    if ($StartupOwnerRegistered) {
+        Release-ProjectSessionComponent -ComponentName "backend startup launcher"
+        $StartupComponentRegistered = $false
+        Release-ProjectSessionOwner -OwnerName "backend startup"
+        $StartupOwnerRegistered = $false
     }
+    Write-Host "Project session supervisor: PID $($SessionSupervisor.Id)"
     Write-Host "Qwen3-TTS facade: $PublicUrl"
     Write-Host "Engine: qwentts.cpp / CUDA0 / $($Health.model_variant) / $($Health.model_file) (PID $($Engine.Id))"
     Write-Host "Default voice: $($Health.default_voice)"
 } catch {
     if ($null -eq $PreviousInternal) { Remove-Item Env:QWEN3_TTS_SESSION_INTERNAL -ErrorAction SilentlyContinue } else { $env:QWEN3_TTS_SESSION_INTERNAL = $PreviousInternal }
-    if ($Facade -and -not $Facade.HasExited) { Stop-Process -Id $Facade.Id -ErrorAction SilentlyContinue }
-    if ($Engine -and -not $Engine.HasExited) { Stop-Process -Id $Engine.Id -ErrorAction SilentlyContinue }
-    if ($Runner -and -not $Runner.HasExited) { Stop-Process -Id $Runner.Id -ErrorAction SilentlyContinue }
-    Remove-Item -LiteralPath $StatePath,$QwenStatePath -Force -ErrorAction SilentlyContinue
+    if ($SessionSupervisor) {
+        Request-ProjectSessionTeardown -Supervisor $SessionSupervisor -Reason "backend startup failed"
+    } else {
+        if ($Facade -and -not $Facade.HasExited) { Stop-Process -Id $Facade.Id -ErrorAction SilentlyContinue }
+        if ($Engine -and -not $Engine.HasExited) { Stop-Process -Id $Engine.Id -ErrorAction SilentlyContinue }
+        if ($Runner -and -not $Runner.HasExited) { Stop-Process -Id $Runner.Id -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath $StatePath,$QwenStatePath -Force -ErrorAction SilentlyContinue
+    }
     throw
 }

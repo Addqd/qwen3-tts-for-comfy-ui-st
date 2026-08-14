@@ -41,12 +41,16 @@ class SileroPreprocessor:
         self._te: Any = None
         self._stress_loaded = False
         self._te_loaded = False
-        self._provision_verified = False
+        self._provision_verified: set[str] = set()
         self._last_stress_seconds = 0.0
         self._last_te_seconds = 0.0
 
-    def _require_provisioned(self) -> None:
-        if self._provision_verified:
+    def _require_provisioned(self, component: str = "all") -> None:
+        if component == "all":
+            self._require_provisioned("stress")
+            self._require_provisioned("text_enhancement")
+            return
+        if component in self._provision_verified:
             return
         try:
             state = json.loads(self.provision_state.read_text(encoding="utf-8-sig"))
@@ -63,28 +67,36 @@ class SileroPreprocessor:
             raise SileroPreprocessingError(
                 "Silero preprocessing is not provisioned; run .\\scripts\\install.ps1"
             ) from exc
-        missing = [str(path) for path in files if not path.exists()]
+        if component == "stress":
+            required = [path for path in files if path not in {catalogue, te_model}]
+            label = "Silero Stress"
+        elif component == "text_enhancement":
+            required = [catalogue, te_model]
+            label = "Silero Text Enhancement"
+        else:
+            raise ValueError(f"Unknown Silero component: {component}")
+        missing = [str(path) for path in required if not path.exists()]
         if missing:
             raise SileroPreprocessingError(
-                "Silero preprocessing assets are missing; run .\\scripts\\install.ps1"
+                f"{label} assets are missing; run .\\scripts\\install.ps1"
             )
         try:
-            if (
-                state["catalogue_revision"] != expected_catalogue["revision"]
-                or state["catalogue_sha256"] != expected_catalogue["sha256"]
-                or hashlib.sha256(catalogue.read_bytes()).hexdigest() != expected_catalogue["sha256"]
-                or state["te_model_sha256"] != expected_te["sha256"]
-                or hashlib.sha256(te_model.read_bytes()).hexdigest() != expected_te["sha256"]
+            if component == "text_enhancement" and (
+                    state["catalogue_revision"] != expected_catalogue["revision"]
+                    or state["catalogue_sha256"] != expected_catalogue["sha256"]
+                    or hashlib.sha256(catalogue.read_bytes()).hexdigest() != expected_catalogue["sha256"]
+                    or state["te_model_sha256"] != expected_te["sha256"]
+                    or hashlib.sha256(te_model.read_bytes()).hexdigest() != expected_te["sha256"]
             ):
-                raise ValueError("pinned Silero provenance mismatch")
-            for path in files:
+                raise ValueError("pinned Silero Text Enhancement provenance mismatch")
+            for path in required:
                 if hashlib.sha256(path.read_bytes()).hexdigest() != asset_sha256[str(path)]:
                     raise ValueError(f"Silero asset digest mismatch: {path}")
         except (OSError, KeyError, TypeError, ValueError) as exc:
             raise SileroPreprocessingError(
-                "Silero preprocessing integrity validation failed; run .\\scripts\\install.ps1"
+                f"{label} integrity validation failed; run .\\scripts\\install.ps1"
             ) from exc
-        self._provision_verified = True
+        self._provision_verified.add(component)
 
     @staticmethod
     def _configure_torch() -> Any:
@@ -97,7 +109,7 @@ class SileroPreprocessor:
     def _load_stress(self) -> Callable[[str], str]:
         with self._lock:
             if self._stress is None:
-                self._require_provisioned()
+                self._require_provisioned("stress")
                 self._configure_torch()
                 module = importlib.import_module("silero_stress")
                 self._stress = module.load_accentor()
@@ -109,7 +121,7 @@ class SileroPreprocessor:
     def _load_te(self) -> Any:
         with self._lock:
             if self._te is None:
-                self._require_provisioned()
+                self._require_provisioned("text_enhancement")
                 self._configure_torch()
                 module = importlib.import_module("silero")
                 loaded = module.silero_te()
@@ -143,7 +155,7 @@ class SileroPreprocessor:
                 enhanced = self._validated(self._load_te().enhance_text(value, "ru"), "Silero Text Enhancement", value)
                 if all(
                     len(re.findall(re.escape(term), enhanced, flags=re.I))
-                    >= len(re.findall(re.escape(term), value, flags=re.I))
+                    == len(re.findall(re.escape(term), value, flags=re.I))
                     for term in protected
                 ):
                     value = enhanced
@@ -158,16 +170,35 @@ class SileroPreprocessor:
         if auto_stress == "silero" and value.strip():
             started = time.perf_counter()
             try:
+                protected_value = value
+                protected_phrases: list[tuple[str, str]] = []
+                multiword_terms = [
+                    term for term in sorted(protected, key=len, reverse=True)
+                    if not re.fullmatch(r"[A-Za-zА-Яа-яЁё]+", term)
+                ]
+                for term in multiword_terms:
+                    pattern = re.compile(re.escape(term), flags=re.I)
+
+                    def protect(match: re.Match[str]) -> str:
+                        placeholder = f"qwenprotectedtoken{len(protected_phrases)}"
+                        protected_phrases.append((placeholder, match.group(0)))
+                        return placeholder
+
+                    protected_value = pattern.sub(protect, protected_value)
                 words_to_ignore = sorted({
-                    word.casefold()
+                    term.casefold()
                     for term in protected
-                    for word in re.findall(r"[A-Za-zА-Яа-яЁё]+", term)
-                })
+                    if re.fullmatch(r"[A-Za-zА-Яа-яЁё]+", term)
+                } | {placeholder for placeholder, _original in protected_phrases})
                 stressed = self._validated(
-                    self._load_stress()(value, words_to_ignore=words_to_ignore or None),
+                    self._load_stress()(protected_value, words_to_ignore=words_to_ignore or None),
                     "Silero Stress",
-                    value,
+                    protected_value,
                 )
+                for placeholder, original in protected_phrases:
+                    if len(re.findall(re.escape(placeholder), stressed, flags=re.I)) != 1:
+                        raise SileroPreprocessingError("Silero Stress changed a protected pronunciation phrase")
+                    stressed = re.sub(re.escape(placeholder), lambda _match, value=original: value, stressed, count=1, flags=re.I)
                 value = format_stress_markers(stressed, stress_format)
             except SileroPreprocessingError:
                 raise

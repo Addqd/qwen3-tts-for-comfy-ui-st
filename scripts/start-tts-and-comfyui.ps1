@@ -77,6 +77,13 @@ if ($WaitForComfyUIExit -and -not $VisibleComfyUIConsole) {
     throw "WaitForComfyUIExit requires VisibleComfyUIConsole. No services were started."
 }
 
+$SupervisorProcess = Start-OrJoin-ProjectSession -OwnerName "combined launcher" -MonitorOwner -Components @()
+$CombinedOwnerRegistered = $true
+$SupervisorProcess = Start-OrJoin-ProjectSession -Components @(
+    @{ name = "combined startup launcher"; pid = $PID }
+)
+$CombinedComponentRegistered = $true
+
 try {
     if (Test-LocalHttp -Uri "$ComfyUrl/system_stats") {
         Assert-QwenTTSCloneVoiceSchema -Url $ComfyUrl
@@ -132,17 +139,12 @@ try {
     if (-not $EngineProcess -or -not $RunnerProcess) {
         throw "The qwentts.cpp engine or its runner could not be verified for session supervision."
     }
-    $SessionParameters = @{
-        OwnerName = "combined launcher"
-        Components = @(
-            @{ name = "facade"; pid = $BackendProcess.Id },
-            @{ name = "qwentts runner"; pid = $RunnerProcess.Id },
-            @{ name = "qwentts.cpp"; pid = $EngineProcess.Id },
-            @{ name = "ComfyUI"; pid = $ComfyProcess.Id }
-        )
-    }
-    if ($WaitForComfyUIExit) { $SessionParameters.MonitorOwner = $true }
-    $SupervisorProcess = Start-OrJoin-ProjectSession @SessionParameters
+    $SupervisorProcess = Start-OrJoin-ProjectSession -Components @(
+        @{ name = "facade"; pid = $BackendProcess.Id },
+        @{ name = "qwentts runner"; pid = $RunnerProcess.Id },
+        @{ name = "qwentts.cpp"; pid = $EngineProcess.Id },
+        @{ name = "ComfyUI"; pid = $ComfyProcess.Id }
+    )
     Write-Host "Project session supervisor: PID $($SupervisorProcess.Id)"
 
     if ($WaitForComfyUIExit) {
@@ -159,14 +161,14 @@ try {
             }
         }
         Write-Host "Project session stopped. Backend and ComfyUI are closed."
+    } elseif ($CombinedOwnerRegistered) {
+        Release-ProjectSessionComponent -ComponentName "combined startup launcher"
+        $CombinedComponentRegistered = $false
+        Release-ProjectSessionOwner -OwnerName "combined launcher"
+        $CombinedOwnerRegistered = $false
     }
 } catch {
     $Failure = $_
-    if ($ComfyUIStartAttempted -and (Test-Path -LiteralPath $script:ComfyUIStatePath)) {
-        try { & (Join-Path $PSScriptRoot "stop-comfyui.ps1") } catch { Write-Warning "Unable to clean up ComfyUI after startup failure: $($_.Exception.Message)" }
-    }
-    if ($BackendStartAttempted) {
-        try { & (Join-Path $script:ProjectRoot "stop.ps1") } catch { Write-Warning "Unable to clean up the backend after startup failure: $($_.Exception.Message)" }
-    }
+    Request-ProjectSessionTeardown -Supervisor $SupervisorProcess -Reason "combined startup failed"
     throw $Failure
 }

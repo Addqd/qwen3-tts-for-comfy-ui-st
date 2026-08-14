@@ -40,6 +40,19 @@ def _sleeping_process() -> subprocess.Popen[bytes]:
     return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
 
 
+def _session_command(mode: str, root: Path, request: Path, state: Path) -> list[str]:
+    return [
+        sys.executable, str(SUPERVISOR), mode, "--project-root", str(root),
+        "--request", str(request), "--state", str(state),
+    ]
+
+
+def _request_stop(root: Path, state: Path, supervisor_pid: int) -> None:
+    request = root / f"stop-{time.time_ns()}.json"
+    request.write_text(json.dumps({"supervisor_pid": supervisor_pid, "reason": "test cleanup"}), encoding="utf-8")
+    subprocess.run(_session_command("request-stop", root, request, state), check=False, timeout=10)
+
+
 def _prepare_cleanup_scripts(root: Path) -> None:
     scripts = root / "scripts"
     scripts.mkdir(exist_ok=True)
@@ -228,7 +241,7 @@ def test_partial_attach_persists_assigned_component_and_requests_teardown(tmp_pa
 
     monkeypatch.setattr(SESSION, "_assign", assign)
     with pytest.raises(OSError, match="late assignment failure"):
-        SESSION.attach(request, state)
+        SESSION._attach_locked(request, state)
     persisted = json.loads(state.read_text(encoding="utf-8"))
     assert assignments == ["first", "second"]
     assert [item["name"] for item in persisted["components"]] == ["first"]
@@ -238,8 +251,136 @@ def test_partial_attach_persists_assigned_component_and_requests_teardown(tmp_pa
 
 def test_launcher_owner_and_stop_waiting_are_conditionally_scoped():
     combined = (ROOT / "scripts" / "start-tts-and-comfyui.ps1").read_text(encoding="utf-8-sig")
+    backend = (ROOT / "start.ps1").read_text(encoding="utf-8-sig")
+    comfy = (ROOT / "scripts" / "start-comfyui.ps1").read_text(encoding="utf-8-sig")
     stop_backend = (ROOT / "stop.ps1").read_text(encoding="utf-8-sig")
     stop_comfy = (ROOT / "scripts" / "stop-comfyui.ps1").read_text(encoding="utf-8-sig")
-    assert "if ($WaitForComfyUIExit) { $SessionParameters.MonitorOwner = $true }" in combined
+    assert combined.index('Start-OrJoin-ProjectSession -OwnerName "combined launcher" -MonitorOwner -Components @()') < combined.index('start-comfyui.ps1')
+    assert backend.index('Start-OrJoin-ProjectSession -OwnerName "backend startup" -MonitorOwner -Components @()') < backend.index("Start-Process -FilePath $Python")
+    assert comfy.index('Start-OrJoin-ProjectSession -OwnerName "ComfyUI startup" -MonitorOwner -Components @()') < comfy.index("$Process = Start-Process")
+    assert combined.index('name = "combined startup launcher"') < combined.index('start-comfyui.ps1')
+    assert backend.index('name = "backend startup launcher"') < backend.index("Start-Process -FilePath $Python")
+    assert comfy.index('name = "ComfyUI startup launcher"') < comfy.index("$Process = Start-Process")
+    assert "Release-ProjectSessionOwner" in combined
+    assert "Release-ProjectSessionOwner" in backend
+    assert "Release-ProjectSessionOwner" in comfy
+    assert "Release-ProjectSessionComponent" in combined
+    assert "Release-ProjectSessionComponent" in backend
+    assert "Release-ProjectSessionComponent" in comfy
     assert "Test-ProjectSessionComponent" in stop_backend and "Wait-ProjectSessionTeardown" in stop_backend
     assert "Test-ProjectSessionComponent" in stop_comfy and "Wait-ProjectSessionTeardown" in stop_comfy
+
+
+def test_two_simultaneous_session_starters_share_one_supervisor(tmp_path):
+    _prepare_cleanup_scripts(tmp_path)
+    owner = _sleeping_process()
+    state = tmp_path / "project-session.json"
+    requests = [tmp_path / f"ensure-{index}.json" for index in range(2)]
+    for request in requests:
+        request.write_text(json.dumps({"owners": [{"name": "launcher", "pid": owner.pid}], "components": []}), encoding="utf-8")
+    starters = [subprocess.Popen(_session_command("ensure", tmp_path, request, state)) for request in requests]
+    try:
+        assert [process.wait(timeout=20) for process in starters] == [0, 0]
+        persisted = json.loads(state.read_text(encoding="utf-8"))
+        assert SESSION._same_process(persisted["supervisor"])
+    finally:
+        owner.terminate()
+        owner.wait(timeout=5)
+        if state.exists():
+            persisted = json.loads(state.read_text(encoding="utf-8"))
+            _request_stop(tmp_path, state, int(persisted["supervisor"]["pid"]))
+        _wait(lambda: not state.exists(), timeout=15)
+
+
+def test_stale_state_claim_cannot_remove_newly_published_session(tmp_path):
+    _prepare_cleanup_scripts(tmp_path)
+    owner = _sleeping_process()
+    state = tmp_path / "project-session.json"
+    state.write_text('{"schema":1}', encoding="utf-8")
+    requests = [tmp_path / f"stale-{index}.json" for index in range(2)]
+    for request in requests:
+        request.write_text(json.dumps({"owners": [{"name": "launcher", "pid": owner.pid}], "components": []}), encoding="utf-8")
+    starters = [subprocess.Popen(_session_command("ensure", tmp_path, request, state)) for request in requests]
+    try:
+        assert [process.wait(timeout=20) for process in starters] == [0, 0]
+        assert json.loads(state.read_text(encoding="utf-8"))["session_id"]
+    finally:
+        owner.terminate()
+        owner.wait(timeout=5)
+        _wait(lambda: not state.exists(), timeout=15)
+
+
+def test_two_concurrent_attaches_merge_components_without_loss(tmp_path):
+    _prepare_cleanup_scripts(tmp_path)
+    owner, first, second = _sleeping_process(), _sleeping_process(), _sleeping_process()
+    state = tmp_path / "project-session.json"
+    initial = tmp_path / "initial.json"
+    initial.write_text(json.dumps({"owners": [{"name": "launcher", "pid": owner.pid}], "components": []}), encoding="utf-8")
+    created = subprocess.run(_session_command("ensure", tmp_path, initial, state), check=False, timeout=20)
+    assert created.returncode == 0
+    requests = []
+    for name, process in (("first", first), ("second", second)):
+        request = tmp_path / f"attach-{name}.json"
+        request.write_text(json.dumps({"owners": [], "components": [{"name": name, "pid": process.pid}]}), encoding="utf-8")
+        requests.append(request)
+    attaches = [subprocess.Popen(_session_command("attach", tmp_path, request, state)) for request in requests]
+    try:
+        assert [process.wait(timeout=20) for process in attaches] == [0, 0]
+        persisted = json.loads(state.read_text(encoding="utf-8"))
+        assert {item["name"] for item in persisted["components"]} == {"first", "second"}
+    finally:
+        owner.terminate()
+        owner.wait(timeout=5)
+        for process in (first, second):
+            if process.poll() is None:
+                process.wait(timeout=15)
+        _wait(lambda: not state.exists(), timeout=15)
+
+
+def test_owner_death_during_partial_startup_stops_first_attached_component(tmp_path):
+    _prepare_cleanup_scripts(tmp_path)
+    owner, component = _sleeping_process(), _sleeping_process()
+    state = tmp_path / "project-session.json"
+    initial = tmp_path / "initial.json"
+    initial.write_text(json.dumps({"owners": [{"name": "startup launcher", "pid": owner.pid}], "components": []}), encoding="utf-8")
+    created = subprocess.run(_session_command("ensure", tmp_path, initial, state), check=False, timeout=20)
+    assert created.returncode == 0
+    attach_request = tmp_path / "attach.json"
+    attach_request.write_text(json.dumps({"owners": [], "components": [{"name": "first component", "pid": component.pid}]}), encoding="utf-8")
+    assert subprocess.run(_session_command("attach", tmp_path, attach_request, state), check=False, timeout=20).returncode == 0
+    owner.terminate()
+    owner.wait(timeout=5)
+    component.wait(timeout=15)
+    _wait(lambda: not state.exists(), timeout=15)
+
+
+def test_released_startup_launcher_can_exit_without_stopping_ready_component(tmp_path):
+    _prepare_cleanup_scripts(tmp_path)
+    launcher, component = _sleeping_process(), _sleeping_process()
+    state = tmp_path / "project-session.json"
+    initial = tmp_path / "initial.json"
+    initial.write_text(json.dumps({"owners": [{"name": "startup", "pid": launcher.pid}], "components": []}), encoding="utf-8")
+    assert subprocess.run(_session_command("ensure", tmp_path, initial, state), check=False, timeout=20).returncode == 0
+    attach_request = tmp_path / "attach.json"
+    attach_request.write_text(json.dumps({
+        "owners": [],
+        "components": [
+            {"name": "startup launcher", "pid": launcher.pid},
+            {"name": "ready service", "pid": component.pid},
+        ],
+    }), encoding="utf-8")
+    assert subprocess.run(_session_command("attach", tmp_path, attach_request, state), check=False, timeout=20).returncode == 0
+    release_component = tmp_path / "release-component.json"
+    release_component.write_text(json.dumps({"components": [{"name": "startup launcher", "pid": launcher.pid}]}), encoding="utf-8")
+    assert subprocess.run(_session_command("release-component", tmp_path, release_component, state), check=False, timeout=20).returncode == 0
+    release_owner = tmp_path / "release-owner.json"
+    release_owner.write_text(json.dumps({"owners": [{"name": "startup", "pid": launcher.pid}]}), encoding="utf-8")
+    assert subprocess.run(_session_command("release-owner", tmp_path, release_owner, state), check=False, timeout=20).returncode == 0
+    launcher.terminate()
+    launcher.wait(timeout=5)
+    time.sleep(1)
+    assert component.poll() is None
+    assert state.exists()
+    component.terminate()
+    component.wait(timeout=5)
+    _wait(lambda: not state.exists(), timeout=15)

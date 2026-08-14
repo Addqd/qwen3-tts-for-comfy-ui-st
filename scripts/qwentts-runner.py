@@ -41,7 +41,7 @@ def main() -> int:
     logs = root / "logs"
     runtime.mkdir(parents=True, exist_ok=True)
     logs.mkdir(parents=True, exist_ok=True)
-    executable = config.path("qwentts.executable", "runtime/qwentts/bin/tts-server.exe")
+    executable, _codec_executable = config.qwentts_executables()
     talker_model, codec_model = config.qwentts_models()
     for required in (executable, talker_model, codec_model):
         if not required.exists():

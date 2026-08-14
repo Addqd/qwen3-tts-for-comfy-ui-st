@@ -124,7 +124,7 @@ class VoiceLibrary:
         temporary.replace(metadata_path)
 
     def _encode(self, reference: Path, variant_dir: Path) -> tuple[Path, Path]:
-        executable = self.config.path("qwentts.codec_executable", "runtime/qwentts/bin/qwen-codec.exe")
+        _server_executable, executable = self.config.qwentts_executables()
         for required in (executable, self.talker_model, self.codec_model):
             if not required.exists():
                 raise FileNotFoundError(f"Required qwentts BF16 file is missing: {required}")

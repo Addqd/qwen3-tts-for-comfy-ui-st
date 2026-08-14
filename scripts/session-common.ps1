@@ -40,20 +40,51 @@ function Request-ProjectSessionTeardown {
         }
         return
     }
+    $Python = Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"
+    $SupervisorScript = Join-Path $PSScriptRoot "project-session.py"
+    $RequestPath = Join-Path (Split-Path -Parent $script:ProjectSessionStatePath) ("project-session-stop-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
+    @{ supervisor_pid = [int]$Supervisor.Id; reason = $Reason } | ConvertTo-Json | Set-Content -LiteralPath $RequestPath -Encoding UTF8
     try {
-        $State = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
-        if ([int]$State.supervisor.pid -ne [int]$Supervisor.Id) {
-            Write-Warning "Project session state belongs to another supervisor; the new supervisor was left to fail safely without terminating adopted processes."
+        & $Python $SupervisorScript request-stop --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Unable to request controlled project-session teardown (exit $LASTEXITCODE)."
             return
         }
-        $State | Add-Member -NotePropertyName stop_requested -NotePropertyValue $true -Force
-        $State | Add-Member -NotePropertyName stop_reason -NotePropertyValue $Reason -Force
-        $Temporary = "$script:ProjectSessionStatePath.$PID.tmp"
-        $State | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Temporary -Encoding UTF8
-        Move-Item -LiteralPath $Temporary -Destination $script:ProjectSessionStatePath -Force
         try { Wait-Process -Id $Supervisor.Id -Timeout 20 -ErrorAction SilentlyContinue } catch { }
-    } catch {
-        Write-Warning "Unable to request controlled project-session teardown: $($_.Exception.Message)"
+    } finally {
+        Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Release-ProjectSessionOwner {
+    param([string]$OwnerName = "launcher")
+    if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) { return }
+    $Python = Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"
+    $SupervisorScript = Join-Path $PSScriptRoot "project-session.py"
+    $Runtime = Split-Path -Parent $script:ProjectSessionStatePath
+    $RequestPath = Join-Path $Runtime ("project-session-release-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
+    @{ owners = @(@{ name = $OwnerName; pid = $PID }) } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
+    try {
+        & $Python $SupervisorScript release-owner --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
+        if ($LASTEXITCODE -notin @(0,3)) { throw "Unable to release the project-session startup owner (exit $LASTEXITCODE)." }
+    } finally {
+        Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Release-ProjectSessionComponent {
+    param([Parameter(Mandatory = $true)][string]$ComponentName)
+    if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) { return }
+    $Python = Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"
+    $SupervisorScript = Join-Path $PSScriptRoot "project-session.py"
+    $Runtime = Split-Path -Parent $script:ProjectSessionStatePath
+    $RequestPath = Join-Path $Runtime ("project-session-release-component-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
+    @{ components = @(@{ name = $ComponentName; pid = $PID }) } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
+    try {
+        & $Python $SupervisorScript release-component --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
+        if ($LASTEXITCODE -notin @(0,3)) { throw "Unable to release the project-session startup component (exit $LASTEXITCODE)." }
+    } finally {
+        Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -77,44 +108,16 @@ function Start-OrJoin-ProjectSession {
     }
     $Request | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
 
-    if (Test-Path -LiteralPath $script:ProjectSessionStatePath) {
-        & $Python $SupervisorScript attach --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
-        $AttachExit = $LASTEXITCODE
-        if ($AttachExit -eq 0) {
-            $State = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
-            return Get-Process -Id ([int]$State.supervisor.pid) -ErrorAction Stop
+    try {
+        & $Python $SupervisorScript ensure --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
+        $EnsureExit = $LASTEXITCODE
+        if ($EnsureExit -ne 0) {
+            if ($EnsureExit -eq 7) { throw "A managed project session must be created before starting the first project component." }
+            throw "The project session cannot accept the requested lifecycle mutation (exit $EnsureExit)."
         }
+        $Session = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
+        return Get-Process -Id ([int]$Session.supervisor.pid) -ErrorAction Stop
+    } finally {
         Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
-        if ($AttachExit -ne 3) {
-            throw "The existing project session cannot accept new components (exit $AttachExit). Stop it and retry."
-        }
-        Remove-Item -LiteralPath $script:ProjectSessionStatePath -Force -ErrorAction SilentlyContinue
-        $Request | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
     }
-
-    $OutLog = Join-Path $Logs "project-session.out.log"
-    $ErrLog = Join-Path $Logs "project-session.err.log"
-    $Supervisor = Start-Process -FilePath $Python -ArgumentList @(
-        $SupervisorScript, "supervise", "--project-root", $script:ProjectRoot,
-        "--request", $RequestPath, "--state", $script:ProjectSessionStatePath
-    ) -WorkingDirectory $script:ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog -PassThru
-
-    $Deadline = (Get-Date).AddSeconds(15)
-    do {
-        Start-Sleep -Milliseconds 100
-        if ($Supervisor.HasExited) {
-            $Detail = if (Test-Path -LiteralPath $ErrLog) { (Get-Content -Raw -LiteralPath $ErrLog -Encoding UTF8).Trim() } else { "" }
-            throw "Project session supervisor failed during startup (exit $($Supervisor.ExitCode)). $Detail"
-        }
-    } while (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath) -and (Get-Date) -lt $Deadline)
-    if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
-        Request-ProjectSessionTeardown -Supervisor $Supervisor -Reason "session state publication timed out"
-        throw "Project session supervisor did not publish its state within 15 seconds."
-    }
-    $State = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
-    if ([int]$State.supervisor.pid -ne $Supervisor.Id) {
-        Request-ProjectSessionTeardown -Supervisor $Supervisor -Reason "published state identity mismatch"
-        throw "Project session supervisor state belongs to another process."
-    }
-    return $Supervisor
 }
