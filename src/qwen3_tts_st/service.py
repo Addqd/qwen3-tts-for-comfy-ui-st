@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import io
 import json
 import subprocess
 import tempfile
@@ -13,7 +14,7 @@ from typing import Any
 import httpx
 
 from .normalization import apply_pronunciation, merge_pronunciation, normalize_russian_text
-from .preprocess import preprocess
+from .preprocess import preprocess, split_long_text
 from .runtime_settings import RuntimeSettingsStore
 from .silero_preprocessing import SileroPreprocessingError, SileroPreprocessor
 from .voices import VoiceLibrary
@@ -118,6 +119,36 @@ class TTSService:
             raise RuntimeError("qwentts returned invalid WAV audio") from exc
 
     @staticmethod
+    def _stitch_wav(parts: list[bytes]) -> bytes:
+        if not parts:
+            raise RuntimeError("qwentts returned no WAV chunks")
+        expected: tuple[int, int, int, str] | None = None
+        frames: list[bytes] = []
+        for payload in parts:
+            try:
+                with wave.open(io.BytesIO(payload), "rb") as source:
+                    current = (
+                        source.getnchannels(), source.getsampwidth(), source.getframerate(), source.getcomptype()
+                    )
+                    if expected is None:
+                        expected = current
+                    elif current != expected:
+                        raise RuntimeError("qwentts returned incompatible WAV chunk formats")
+                    frames.append(source.readframes(source.getnframes()))
+            except (EOFError, wave.Error) as exc:
+                raise RuntimeError("qwentts returned invalid WAV chunk audio") from exc
+        assert expected is not None
+        output = io.BytesIO()
+        with wave.open(output, "wb") as target:
+            target.setnchannels(expected[0])
+            target.setsampwidth(expected[1])
+            target.setframerate(expected[2])
+            target.setcomptype(expected[3], "not compressed")
+            for chunk_frames in frames:
+                target.writeframes(chunk_frames)
+        return output.getvalue()
+
+    @staticmethod
     def _convert(payload: bytes, response_format: str, speed: float) -> tuple[bytes, str]:
         suffixes = {"wav": "wav", "mp3": "mp3", "flac": "flac", "opus": "opus", "aac": "m4a"}
         media = {"wav": "audio/wav", "mp3": "audio/mpeg", "flac": "audio/flac", "opus": "audio/ogg", "aac": "audio/mp4"}
@@ -195,7 +226,6 @@ class TTSService:
                 payload = {
                     "model": self.model_id,
                     "voice": voice,
-                    "input": prepared,
                     "response_format": "wav",
                     "seed": current["seed"] if request.seed is None else request.seed,
                     "max_new_tokens": current["max_new_tokens"] if request.max_new_tokens is None else request.max_new_tokens,
@@ -204,15 +234,24 @@ class TTSService:
                     "top_p": current["top_p"] if request.top_p is None else request.top_p,
                     "repetition_penalty": current["repetition_penalty"] if request.repetition_penalty is None else request.repetition_penalty,
                 }
-                response = await self.client.post("/v1/audio/speech", json=payload)
-                response.raise_for_status()
-                wav = response.content
+                chunks = split_long_text(prepared, int(self.config.get("qwentts.max_chunk_chars", 320)))
+                wav_parts: list[bytes] = []
+                for index, chunk in enumerate(chunks, 1):
+                    response = await self.client.post("/v1/audio/speech", json={**payload, "input": chunk})
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        raise RuntimeError(
+                            f"qwentts chunk {index}/{len(chunks)} failed: {exc.response.text}"
+                        ) from exc
+                    wav_parts.append(response.content)
+                wav = wav_parts[0] if len(wav_parts) == 1 else self._stitch_wav(wav_parts)
                 source_duration = self._wav_duration(wav)
                 output, media_type = await asyncio.to_thread(self._convert, wav, request.response_format, request.speed)
                 duration = source_duration / request.speed
                 metadata = {
                     "duration_seconds": duration,
-                    "segments": 1,
+                    "segments": len(chunks),
                     "model": self.model_id,
                     "engine": "qwentts.cpp",
                     "voice": voice,

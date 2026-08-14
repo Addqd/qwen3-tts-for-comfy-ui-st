@@ -11,6 +11,7 @@ qwentts:
   max_batch: 1
   request_timeout_seconds: 900
   queue_timeout_seconds: 30
+  max_chunk_chars: 320
 
 voices:
   library_dir: voice_library
