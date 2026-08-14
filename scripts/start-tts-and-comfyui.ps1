@@ -144,17 +144,13 @@ try {
 
     if ($WaitForComfyUIExit) {
         Write-Host "Close this launcher window or the ComfyUI Python console to stop qwentts.cpp and ComfyUI."
-        try {
-            Wait-Process -Id $ComfyProcess.Id
-        } finally {
-            try { & (Join-Path $script:ProjectRoot "stop.ps1") } catch { Write-Warning "Backend cleanup: $($_.Exception.Message)" }
-            try { & (Join-Path $PSScriptRoot "stop-comfyui.ps1") } catch { Write-Warning "ComfyUI cleanup: $($_.Exception.Message)" }
-            if ($SupervisorProcess -and -not $SupervisorProcess.HasExited) {
-                try { Wait-Process -Id $SupervisorProcess.Id -Timeout 15 -ErrorAction SilentlyContinue } catch { }
-                $SupervisorProcess.Refresh()
-                if (-not $SupervisorProcess.HasExited) { Stop-Process -Id $SupervisorProcess.Id }
-            }
+        Wait-Process -Id $ComfyProcess.Id
+        Wait-ProjectSessionTeardown -Seconds 25
+        if (Test-Path -LiteralPath $script:ProjectSessionStatePath) {
+            Request-ProjectSessionTeardown -Supervisor $SupervisorProcess -Reason "combined launcher observed ComfyUI exit"
+            Wait-ProjectSessionTeardown -Seconds 10
         }
+        if (Test-Path -LiteralPath $script:ProjectSessionStatePath) { throw "Project supervisor did not complete teardown; diagnostic state was preserved." }
         Write-Host "Project session stopped. Backend and ComfyUI are closed."
     } elseif ($CombinedOwnerRegistered) {
         Release-ProjectSessionOwner -OwnerName "combined launcher"

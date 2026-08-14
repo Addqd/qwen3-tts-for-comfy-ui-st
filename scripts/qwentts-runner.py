@@ -50,10 +50,10 @@ def main() -> int:
         str(executable),
         "--model", str(talker_model),
         "--codec", str(codec_model),
-        "--alias", str(config.get("qwentts.model_id", "tts-1-ru")),
+        "--alias", config.qwentts_model_id(),
         "--host", "127.0.0.1",
         "--port", str(int(config.get("qwentts.port", 8030))),
-        "--lang", str(config.get("qwentts.language", "Russian")),
+        "--lang", config.qwentts_language(),
         "--max-batch", str(int(config.get("qwentts.max_batch", 1))),
     ]
     environment = os.environ.copy()

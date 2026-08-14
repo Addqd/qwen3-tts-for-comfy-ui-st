@@ -10,7 +10,7 @@ import threading
 import pytest
 
 from qwen3_tts_st.config import load_config
-from qwen3_tts_st.normalization import apply_pronunciation
+from qwen3_tts_st.normalization import apply_pronunciation, merge_pronunciation
 from qwen3_tts_st.preprocess import preprocess
 from qwen3_tts_st.runtime_settings import RuntimeSettingsStore
 from qwen3_tts_st.service import TTSService
@@ -144,6 +144,53 @@ def test_conversion_and_literal_replacement_guards(monkeypatch):
     monkeypatch.setattr("qwen3_tts_st.service.subprocess.run", timeout)
     with pytest.raises(RuntimeError, match="FFmpeg conversion timed out"):
         TTSService._convert(b"wav", "mp3", 1)
+
+
+def test_legacy_pronunciation_is_sequential_and_request_override_is_case_insensitive():
+    merged = merge_pronunciation({"Qwen": "first"}, {"qWEN": "AI", "AI": "final"})
+    assert merged == {"qWEN": "AI", "AI": "final"}
+    assert apply_pronunciation("QWEN", merged) == ("final", 2)
+
+
+@pytest.mark.asyncio
+async def test_optional_unreadable_voice_is_isolated_and_not_advertised(tmp_path, monkeypatch):
+    write_profile(tmp_path, "default")
+    optional = tmp_path / "profiles" / "optional"
+    optional.mkdir(parents=True)
+    variant = optional / "variants" / "bf16"
+    variant.mkdir(parents=True)
+    (optional / "reference.wav").write_bytes(b"wav")
+    (variant / "reference.spk").write_bytes(b"spk")
+    (variant / "reference.rvq").write_bytes(b"rvq")
+    (optional / "metadata.json").write_text(json.dumps({
+        "profile_id": "optional", "display_name": "optional", "reference_audio": "reference.wav",
+        "ref_text": "bad", "language": "Russian",
+    }), encoding="utf-8")
+    library = VoiceLibrary(tmp_path, load_config(ROOT / "config" / "config.example.yaml"))
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes(path: Path):
+        if optional in path.parents and path.suffix == ".spk":
+            raise PermissionError("unreadable optional asset")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    registered = await library.register_all(RecordingClient(), required_voice="clone:voice")
+    assert registered == 1
+    assert [item["voice_id"] for item in library.list()] == ["clone:voice"]
+    assert library.failures == [{
+        "voice_id": "clone:optional", "stage": "prepare_or_register", "error": "PermissionError",
+    }]
+    with pytest.raises(RuntimeError, match="unavailable"):
+        library.resolve("clone:optional")
+
+
+@pytest.mark.asyncio
+async def test_required_default_voice_registration_failure_blocks_startup(tmp_path):
+    write_profile(tmp_path, "bad-default")
+    library = VoiceLibrary(tmp_path, load_config(ROOT / "config" / "config.example.yaml"))
+    with pytest.raises(RuntimeError, match="Required default voice failed"):
+        await library.register_all(RecordingClient(fail_ref_text="bad-default"), required_voice="clone:voice")
 
 
 @pytest.mark.asyncio

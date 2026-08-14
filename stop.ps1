@@ -3,9 +3,20 @@ $script:ProjectRoot = $PSScriptRoot
 . (Join-Path $PSScriptRoot "scripts\session-common.ps1")
 $StatePath = Join-Path $PSScriptRoot "runtime\server.json"
 $QwenStatePath = Join-Path $PSScriptRoot "runtime\qwentts.json"
-if (-not (Test-Path -LiteralPath $StatePath)) { Write-Host "Backend is not running (no PID file)."; exit 0 }
-$State = Get-Content -Raw -LiteralPath $StatePath -Encoding UTF8 | ConvertFrom-Json
 $WaitForSession = Test-ProjectSessionComponent -Names @("facade", "qwentts.cpp", "qwentts runner")
+if ($env:QWEN3_TTS_SUPERVISOR_CLEANUP -ne "1" -and $WaitForSession) {
+    $Supervisor = Get-ProjectSessionSupervisor
+    if (-not $Supervisor) { throw "Backend is managed by project-session, but its supervisor identity is unavailable; no unverified PID was stopped." }
+    Request-ProjectSessionTeardown -Supervisor $Supervisor -Reason "backend stop requested"
+    Wait-ProjectSessionTeardown -Seconds 25
+    if (Test-Path -LiteralPath $script:ProjectSessionStatePath) { throw "Project shutdown is incomplete; session state was preserved." }
+    Write-Host "Managed backend session stopped."
+    exit 0
+}
+if (-not (Test-Path -LiteralPath $StatePath)) { Write-Host "Backend is not running (no PID file or managed session)."; exit 0 }
+try { $State = Get-Content -Raw -LiteralPath $StatePath -Encoding UTF8 | ConvertFrom-Json } catch {
+    throw "Backend PID state is malformed and no validated managed session is available; no unverified PID was stopped."
+}
 
 function Stop-ProjectProcess {
     param($Record, [string]$Name)
@@ -50,7 +61,6 @@ $Results = @(
 )
 if ($Results -notcontains $false) {
     Remove-Item -LiteralPath $StatePath,$QwenStatePath -Force -ErrorAction SilentlyContinue
-    if ($env:QWEN3_TTS_SUPERVISOR_CLEANUP -ne "1" -and $WaitForSession) { Wait-ProjectSessionTeardown }
     exit 0
 }
 throw "Project shutdown is incomplete. Runtime state was preserved for a safe retry."

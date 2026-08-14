@@ -70,13 +70,17 @@ def main() -> int:
     if not callable(getattr(te_model, "enhance_text", None)):
         raise RuntimeError("Silero Text Enhancement returned an invalid model")
 
-    roots = [Path(silero.__file__).resolve().parent, Path(silero_stress.__file__).resolve().parent]
-    model_files = sorted({
-        str(path.resolve())
-        for root in roots
-        for path in root.rglob("*")
+    te_root = Path(silero.__file__).resolve().parent
+    stress_root = Path(silero_stress.__file__).resolve().parent
+    stress_assets = sorted(
+        str(path.resolve()) for path in stress_root.rglob("*")
+        if path.is_file() and path.suffix.lower() not in {".py", ".pyc"}
+    )
+    text_enhancement_assets = sorted({
+        str(path.resolve()) for path in te_root.rglob("*")
         if path.is_file() and path.suffix.lower() not in {".py", ".pyc"}
     } | {str(catalogue.resolve())})
+    model_files = sorted(set(stress_assets) | set(text_enhancement_assets))
     if not model_files:
         raise RuntimeError("Silero provisioning did not produce persistent model assets")
 
@@ -84,7 +88,7 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     asset_sha256 = {path: _digest(Path(path)) for path in model_files}
     state = {
-        "schema": 2,
+        "schema": 3,
         "torch": importlib.metadata.version("torch"),
         "torch_cuda": None,
         "silero_stress": importlib.metadata.version("silero-stress"),
@@ -95,6 +99,8 @@ def main() -> int:
         "te_model": str(te_model_path.resolve()),
         "te_model_sha256": te_provenance["sha256"],
         "model_files": model_files,
+        "stress_assets": stress_assets,
+        "text_enhancement_assets": text_enhancement_assets,
         "asset_sha256": asset_sha256,
     }
     temporary = Path(f"{output}.tmp")

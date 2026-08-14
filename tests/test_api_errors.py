@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import qwen3_tts_st.app as app_module
 from qwen3_tts_st.config import load_config
+from qwen3_tts_st.silero_preprocessing import SileroPreprocessingError
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +68,11 @@ def test_invalid_speech_input_is_422_and_connectivity_is_503(monkeypatch):
         response = test_client.post("/v1/audio/speech", json={"input": "тест"})
         assert response.status_code == 503
         assert "engine down" in response.json()["detail"]
+
+        service.speech_error = SileroPreprocessingError("protected term changed")
+        response = test_client.post("/v1/audio/speech", json={"input": "тест"})
+        assert response.status_code == 503
+        assert response.json()["detail"] == "protected term changed"
 
 
 def test_clone_connectivity_failure_is_503(monkeypatch):

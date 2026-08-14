@@ -259,7 +259,7 @@ def _load_creation_claim(state_path: Path) -> dict[str, object] | None:
     return claim
 
 
-def _cleanup(project_root: Path, state_path: Path, session_id: str, job: int, components: list[dict[str, object]]) -> None:
+def _cleanup(project_root: Path, state_path: Path, session_id: str, job: int, components: list[dict[str, object]]) -> bool:
     powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     cleanup_environment = os.environ.copy()
     cleanup_environment["QWEN3_TTS_SUPERVISOR_CLEANUP"] = "1"
@@ -284,17 +284,34 @@ def _cleanup(project_root: Path, state_path: Path, session_id: str, job: int, co
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and any(_same_process(record) for record in components):
         time.sleep(0.2)
-    if any(_same_process(record) for record in components):
-        kernel32.TerminateJobObject(job, 1)
+    survivors = [record for record in components if _same_process(record)]
+    force_failed = False
+    if survivors and not kernel32.TerminateJobObject(job, 1):
+        force_failed = True
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and any(_same_process(record) for record in components):
+        time.sleep(0.2)
+    survivors = [record for record in components if _same_process(record)]
+    if force_failed or survivors:
+        with (project_root / "logs" / "project-session.log").open("a", encoding="utf-8") as log:
+            names = ", ".join(f"{item['name']} PID {item['pid']}" for item in survivors) or "force operation failed"
+            log.write(f"{datetime.now(timezone.utc).isoformat()} session={session_id} cleanup incomplete: {names}\n")
+        return False
     try:
         with _session_mutex(state_path):
             state = _load_session_state(state_path)
             if state is None or state.get("session_id") == session_id:
                 state_path.unlink(missing_ok=True)
-                for name in ("server.json", "qwentts.json", "comfyui.json"):
+                state_files = []
+                if names & {"facade", "qwentts runner", "qwentts.cpp"}:
+                    state_files.extend(("server.json", "qwentts.json"))
+                if "ComfyUI" in names:
+                    state_files.append("comfyui.json")
+                for name in state_files:
                     (state_path.parent / name).unlink(missing_ok=True)
     except (OSError, TimeoutError):
-        pass
+        return False
+    return True
 
 
 def supervise(project_root: Path, request_path: Path, state_path: Path, claim_id: str | None = None) -> int:
@@ -362,8 +379,7 @@ def supervise(project_root: Path, request_path: Path, state_path: Path, claim_id
         (project_root / "logs").mkdir(parents=True, exist_ok=True)
         with (project_root / "logs" / "project-session.log").open("a", encoding="utf-8") as log:
             log.write(f"{datetime.now(timezone.utc).isoformat()} session={session_id} stopping: {reason}\n")
-        _cleanup(project_root, state_path, session_id, job, components)
-        return 0
+        return 0 if _cleanup(project_root, state_path, session_id, job, components) else 10
     finally:
         kernel32.CloseHandle(job)
 
@@ -430,8 +446,6 @@ def attach(request_path: Path, state_path: Path) -> int:
 
 def ensure(project_root: Path, request_path: Path, state_path: Path) -> int:
     request = _read_request(request_path)
-    if request.get("components"):
-        return 7
     claim_id = uuid4().hex
     claimed = False
     deadline = time.monotonic() + 15
@@ -440,6 +454,8 @@ def ensure(project_root: Path, request_path: Path, state_path: Path) -> int:
             state = _load_session_state(state_path) if state_path.exists() else None
             if state is not None and _same_process(state["supervisor"]):
                 return _attach_locked(request_path, state_path)
+            if request.get("components"):
+                return 7
             claim = _load_creation_claim(state_path) if state_path.exists() else None
             if claim is None or not _same_process(claim["creator"]):
                 _atomic_write(state_path, {

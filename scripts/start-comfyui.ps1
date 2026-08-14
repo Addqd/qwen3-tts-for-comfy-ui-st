@@ -33,16 +33,15 @@ if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
             if (-not $NoSessionSupervisor) {
                 $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "ComfyUI startup" -MonitorOwner -Components @()
                 $StartupOwnerRegistered = $true
-            } elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
-                throw "NoSessionSupervisor requires an existing managed project session."
+                Release-ProjectSessionOwner -OwnerName "ComfyUI startup"
+                $StartupOwnerRegistered = $false
+            } else {
+                $SessionSupervisor = Get-ProjectSessionSupervisor
+                if (-not $SessionSupervisor) { throw "NoSessionSupervisor requires an existing validated managed project session." }
             }
             $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
                 @{ name = "ComfyUI"; pid = $OldProcess.Id }
             )
-            if ($StartupOwnerRegistered) {
-                Release-ProjectSessionOwner -OwnerName "ComfyUI startup"
-                $StartupOwnerRegistered = $false
-            }
             Write-Host "Project session supervisor: PID $($SessionSupervisor.Id)"
             Write-Host "ComfyUI is already running: $($OldState.url) (PID $($OldState.pid))"
             return
@@ -55,8 +54,9 @@ if (Test-LocalPortInUse -Port ([int]$Settings.port)) { throw "Port $($Settings.p
 if (-not $NoSessionSupervisor) {
     $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "ComfyUI startup" -MonitorOwner -Components @()
     $StartupOwnerRegistered = $true
-} elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
-    throw "NoSessionSupervisor requires an existing managed project session."
+} else {
+    $SessionSupervisor = Get-ProjectSessionSupervisor
+    if (-not $SessionSupervisor) { throw "NoSessionSupervisor requires an existing validated managed project session." }
 }
 
 & (Join-Path $script:ProjectRoot "integrations\comfyui\install.ps1") `

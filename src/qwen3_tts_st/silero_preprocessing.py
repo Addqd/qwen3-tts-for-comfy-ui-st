@@ -56,9 +56,10 @@ class SileroPreprocessor:
         try:
             state = json.loads(self.provision_state.read_text(encoding="utf-8-sig"))
             provenance = json.loads(self.provenance_path.read_text(encoding="utf-8-sig"))
-            if state.get("schema") != 2 or provenance.get("schema") != 1:
+            if state.get("schema") != 3 or provenance.get("schema") != 1:
                 raise ValueError("unsupported Silero provenance schema")
-            files = [Path(item) for item in state["model_files"]]
+            stress_assets = [Path(item) for item in state["stress_assets"]]
+            text_enhancement_assets = [Path(item) for item in state["text_enhancement_assets"]]
             asset_sha256 = state["asset_sha256"]
             catalogue = Path(state["catalogue"])
             te_model = Path(state["te_model"])
@@ -69,10 +70,10 @@ class SileroPreprocessor:
                 "Silero preprocessing is not provisioned; run .\\scripts\\install.ps1"
             ) from exc
         if component == "stress":
-            required = [path for path in files if path not in {catalogue, te_model}]
+            required = stress_assets
             label = "Silero Stress"
         elif component == "text_enhancement":
-            required = [catalogue, te_model]
+            required = text_enhancement_assets
             label = "Silero Text Enhancement"
         else:
             raise ValueError(f"Unknown Silero component: {component}")
@@ -113,9 +114,10 @@ class SileroPreprocessor:
                 self._require_provisioned("stress")
                 self._configure_torch()
                 module = importlib.import_module("silero_stress")
-                self._stress = module.load_accentor()
-                if not callable(self._stress):
+                loaded = module.load_accentor()
+                if not callable(loaded):
                     raise SileroPreprocessingError("Silero Stress returned an invalid accentor")
+                self._stress = loaded
                 self._stress_loaded = True
             return self._stress
 
@@ -123,12 +125,24 @@ class SileroPreprocessor:
         with self._lock:
             if self._te is None:
                 self._require_provisioned("text_enhancement")
-                self._configure_torch()
+                torch = self._configure_torch()
                 module = importlib.import_module("silero")
-                loaded = module.silero_te()
-                self._te = loaded[0] if isinstance(loaded, tuple) else loaded
-                if not callable(getattr(self._te, "enhance_text", None)):
-                    raise SileroPreprocessingError("Silero Text Enhancement returned an invalid model")
+                original_download = torch.hub.download_url_to_file
+
+                def reject_download(*_args: Any, **_kwargs: Any) -> None:
+                    raise SileroPreprocessingError(
+                        "Silero Text Enhancement attempted a network download; run .\\scripts\\install.ps1"
+                    )
+
+                torch.hub.download_url_to_file = reject_download
+                try:
+                    loaded = module.silero_te()
+                    candidate = loaded[0] if isinstance(loaded, tuple) else loaded
+                    if not callable(getattr(candidate, "enhance_text", None)):
+                        raise SileroPreprocessingError("Silero Text Enhancement returned an invalid model")
+                finally:
+                    torch.hub.download_url_to_file = original_download
+                self._te = candidate
                 self._te_loaded = True
             return self._te
 
@@ -154,12 +168,15 @@ class SileroPreprocessor:
             started = time.perf_counter()
             try:
                 enhanced = self._validated(self._load_te().enhance_text(value, "ru"), "Silero Text Enhancement", value)
-                if all(
+                if not all(
                     len(re.findall(re.escape(term), enhanced, flags=re.I))
                     == len(re.findall(re.escape(term), value, flags=re.I))
                     for term in protected
                 ):
-                    value = enhanced
+                    raise SileroPreprocessingError(
+                        "Silero Text Enhancement changed a protected pronunciation term"
+                    )
+                value = enhanced
             except SileroPreprocessingError:
                 raise
             except Exception as exc:

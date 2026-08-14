@@ -97,6 +97,44 @@ def test_local_backend_override_cannot_disable_cuda0(tmp_path):
     assert 'environment["GGML_BACKEND"] = config.qwentts_backend()' in runner
 
 
+def test_local_config_cannot_override_production_model_identity_or_language(tmp_path):
+    local = tmp_path / "config.local.yaml"
+    local.write_text(
+        "qwentts:\n  model_id: other-model\n  language: English\n  backend: CPU\n",
+        encoding="utf-8",
+    )
+    config = load_config(local)
+    assert config.qwentts_model_id() == "tts-1-ru"
+    assert config.qwentts_language() == "Russian"
+    assert config.qwentts_backend() == "CUDA0"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: {**value, "schema": 2},
+        lambda value: {**value, "files": []},
+        lambda value: {**value, "models": {**value["models"], "files": []}},
+        lambda value: {**value, "models": {**value["models"], "files": {
+            **value["models"]["files"], "extra.gguf": "0" * 64,
+        }}},
+        lambda value: {**value, "files": {**value["files"], "tts-server.exe": "not-a-digest"}},
+    ],
+)
+def test_qwentts_manifest_rejects_invalid_schema_mappings_pair_and_digests(tmp_path, monkeypatch, mutation):
+    source = json.loads((ROOT / "config" / "qwentts-runtime.json").read_text(encoding="utf-8"))
+    manifest = tmp_path / "qwentts-runtime.json"
+    manifest.write_text(json.dumps(mutation(source)), encoding="utf-8")
+    monkeypatch.setattr(config_module, "QWENTTS_MANIFEST", manifest)
+    with pytest.raises(ValueError, match="pinned qwentts runtime manifest is invalid"):
+        load_config(ROOT / "config" / "config.example.yaml")
+
+
+def test_powershell_runtime_verifier_uses_the_central_manifest_validator():
+    verifier = (ROOT / "scripts" / "verify-qwentts-runtime.ps1").read_text(encoding="utf-8-sig")
+    assert "qwentts_manifest" in verifier
+
+
 @pytest.mark.parametrize("files", [None, "bad", 3])
 def test_executable_manifest_files_must_be_an_object(tmp_path, monkeypatch, files):
     manifest = tmp_path / "qwentts-runtime.json"

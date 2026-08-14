@@ -6,7 +6,7 @@ $ProjectRoot = $PSScriptRoot
 $script:ProjectRoot = $ProjectRoot
 . (Join-Path $ProjectRoot "scripts\session-common.ps1")
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$ConfigPath = if ([IO.Path]::IsPathRooted($Config)) { $Config } else { Join-Path $ProjectRoot $Config }
+$ConfigPath = [IO.Path]::GetFullPath($(if ([IO.Path]::IsPathRooted($Config)) { $Config } else { Join-Path $ProjectRoot $Config }))
 $Runtime = Join-Path $ProjectRoot "runtime"
 $StatePath = Join-Path $Runtime "server.json"
 $QwenStatePath = Join-Path $Runtime "qwentts.json"
@@ -29,14 +29,21 @@ foreach ($Port in @([int]$ConfigJson.public,[int]$ConfigJson.engine)) {
 $RunnerScript = Join-Path $ProjectRoot "scripts\qwentts-runner.py"
 $SessionSupervisor = $null
 $StartupOwnerRegistered = $false
+$Runner = $null
+$RunnerProcess = $null
+$Engine = $null
+$Facade = $null
+$EngineReady = $false
+$Health = $null
 try {
     if (-not $NoSessionSupervisor) {
         $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "backend startup" -MonitorOwner -Components @()
         $StartupOwnerRegistered = $true
-    } elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
-        throw "NoSessionSupervisor requires an existing managed project session."
+    } else {
+        $SessionSupervisor = Get-ProjectSessionSupervisor
+        if (-not $SessionSupervisor) { throw "NoSessionSupervisor requires an existing validated managed project session." }
     }
-    $Runner = Start-ManagedProjectProcess -Name "qwentts runner" -FilePath $Python `
+    $Runner = Start-ManagedProjectProcess -Name "qwentts runner launcher" -FilePath $Python `
         -ArgumentList @($RunnerScript,"--config",$ConfigPath) -WorkingDirectory $ProjectRoot `
         -Environment @{ QWEN3_TTS_SESSION_INTERNAL = "1" } -Hidden
     $EngineDeadline = (Get-Date).AddSeconds($WaitSeconds)
@@ -48,7 +55,8 @@ try {
     if (-not $EngineReady) { throw "qwentts did not answer /health within $WaitSeconds seconds" }
     $QwenState = Get-Content -Raw -LiteralPath $QwenStatePath -Encoding UTF8 | ConvertFrom-Json
     $Engine = Get-Process -Id ([int]$QwenState.pid) -ErrorAction Stop
-    if ([int]$QwenState.runner_pid -ne $Runner.Id -or -not $QwenState.session_id) {
+    $RunnerProcess = Get-Process -Id ([int]$QwenState.runner_pid) -ErrorAction Stop
+    if ([int]$QwenState.runner_parent_pid -ne $Runner.Id -or -not $QwenState.session_id) {
         throw "qwentts runtime state does not belong to the current runner session"
     }
     $SessionLog = Join-Path $ProjectRoot "logs\qwentts.err.log"
@@ -60,9 +68,15 @@ try {
     $QwenState | Add-Member -NotePropertyName verified_backend -NotePropertyValue "CUDA0" -Force
     $QwenState | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $QwenStatePath -Encoding UTF8
 
-    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(@{ name = "qwentts.cpp"; pid = $Engine.Id })
+    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
+        @{ name = "qwentts runner"; pid = $RunnerProcess.Id },
+        @{ name = "qwentts.cpp"; pid = $Engine.Id }
+    )
     $Facade = Start-ManagedProjectProcess -Name "facade" -FilePath $Python `
-        -ArgumentList @("-m","qwen3_tts_st.cli","--config",$ConfigPath) -WorkingDirectory $ProjectRoot -Hidden
+        -ArgumentList @("-m","qwen3_tts_st.cli","--config",$ConfigPath) -WorkingDirectory $ProjectRoot -Hidden `
+        -Environment @{ QWEN3_TTS_SESSION_INTERNAL = "1" } `
+        -RedirectStandardOutput (Join-Path $ProjectRoot "logs\facade.out.log") `
+        -RedirectStandardError (Join-Path $ProjectRoot "logs\facade.err.log")
     $PublicUrl = "http://127.0.0.1:$($ConfigJson.public)"
     $FacadeDeadline = (Get-Date).AddSeconds($WaitSeconds)
     do {
@@ -74,7 +88,8 @@ try {
 
     $State = [ordered]@{
         facade = @{ pid=$Facade.Id; start_time=$Facade.StartTime.ToUniversalTime().ToString("o"); executable=$Python }
-        runner = @{ pid=$Runner.Id; start_time=$Runner.StartTime.ToUniversalTime().ToString("o"); executable=$Python }
+        runner = @{ pid=$RunnerProcess.Id; start_time=$RunnerProcess.StartTime.ToUniversalTime().ToString("o"); executable=$RunnerProcess.Path }
+        runner_launcher = @{ pid=$Runner.Id; start_time=$Runner.StartTime.ToUniversalTime().ToString("o"); executable=$Python }
         engine = @{ pid=$Engine.Id; start_time=$Engine.StartTime.ToUniversalTime().ToString("o"); executable=[string]$QwenState.executable }
         config = [IO.Path]::GetFullPath($ConfigPath)
     }
@@ -93,6 +108,7 @@ try {
     } else {
         if ($Facade -and -not $Facade.HasExited) { Stop-Process -Id $Facade.Id -ErrorAction SilentlyContinue }
         if ($Engine -and -not $Engine.HasExited) { Stop-Process -Id $Engine.Id -ErrorAction SilentlyContinue }
+        if ($RunnerProcess -and -not $RunnerProcess.HasExited) { Stop-Process -Id $RunnerProcess.Id -ErrorAction SilentlyContinue }
         if ($Runner -and -not $Runner.HasExited) { Stop-Process -Id $Runner.Id -ErrorAction SilentlyContinue }
         Remove-Item -LiteralPath $StatePath,$QwenStatePath -Force -ErrorAction SilentlyContinue
     }

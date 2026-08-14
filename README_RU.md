@@ -25,7 +25,7 @@ Backend и ComfyUI вместе:
 .\start-tts-and-comfyui.bat
 ```
 
-Startup проверяет SHA-256 официального prebuilt и BF16 GGUF, запускает одну persistent CUDA-модель, регистрирует сохранённые `.spk/.rvq`, затем запускает facade. Все поддерживаемые пути создают или присоединяются к одной project session; основные компоненты контролируются Windows Job Object. Корневой BAT остаётся живым и регистрируется как owner, а fire-and-forget `start.ps1` и standalone ComfyUI launcher контролируются по запущенным компонентам, а не по уже завершившемуся launcher-процессу. Полный реальный BAT close-smoke пока требует повторной проверки после устранения локального ACL blocker в пользовательской voice library; архитектурные Job Object тесты уже проходят.
+Startup проверяет SHA-256 официального prebuilt и BF16 GGUF, запускает одну persistent CUDA-модель, регистрирует сохранённые `.spk/.rvq`, затем запускает facade. Все поддерживаемые пути создают или присоединяются к одной project session; основные компоненты контролируются Windows Job Object. Корневой BAT остаётся живым и регистрируется как owner, а fire-and-forget `start.ps1` и standalone ComfyUI launcher после успешного запуска освобождают временного owner и контролируются по запущенным компонентам.
 
 Silero Stress и Text Enhancement независимы и могут работать вместе. Настройки сохраняются существующим `GET/PUT /admin/runtime-settings`. Ручные pronunciation overrides имеют приоритет над автоматической обработкой. Форматы ударений `+`, combining acute и apostrophe экспериментальны и требуют ручного A/B-прослушивания; Text Enhancement может изменить авторскую пунктуацию.
 

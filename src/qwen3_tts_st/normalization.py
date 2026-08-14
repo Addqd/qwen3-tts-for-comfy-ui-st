@@ -36,17 +36,27 @@ def parse_pronunciation_overrides(value: Any) -> dict[str, str]:
 def merge_pronunciation(*values: Any) -> dict[str, str]:
     result: dict[str, str] = {}
     for value in values:
-        result.update(parse_pronunciation_overrides(value))
+        for source, replacement in parse_pronunciation_overrides(value).items():
+            folded = source.casefold()
+            result = {key: existing for key, existing in result.items() if key.casefold() != folded}
+            result[source] = replacement
     return result
 
 
 def apply_pronunciation(text: str, dictionary: Mapping[str, str]) -> tuple[str, int]:
     if not dictionary:
         return text, 0
-    sources = sorted(dictionary, key=len, reverse=True)
-    pattern = re.compile("|".join(re.escape(source) for source in sources), re.I)
-    replacements = {source.casefold(): replacement for source, replacement in dictionary.items()}
-    return pattern.subn(lambda match: replacements[match.group(0).casefold()], text)
+    value = text
+    count = 0
+    for source in sorted(dictionary, key=len, reverse=True):
+        value, replaced = re.subn(
+            re.escape(source),
+            lambda _match, replacement=dictionary[source]: replacement,
+            value,
+            flags=re.I,
+        )
+        count += replaced
+    return value, count
 
 
 def split_pronunciation_spans(text: str, dictionary: Mapping[str, str]) -> tuple[list[PronunciationSpan], int]:

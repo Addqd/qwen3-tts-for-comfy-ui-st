@@ -159,7 +159,12 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
             registered = await app.state.tts.library.register_all(app.state.tts.client)
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=503, detail=f"qwentts registration failed: {exc}") from exc
-        return {"status": "ok", "profile_count": count, "registered": registered}
+        return {
+            "status": "ok" if not app.state.tts.library.failures else "partial",
+            "profile_count": count,
+            "registered": registered,
+            "failures": app.state.tts.library.failures,
+        }
 
     @app.get("/admin/runtime-settings")
     async def runtime_settings():

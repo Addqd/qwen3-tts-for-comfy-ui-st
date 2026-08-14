@@ -22,6 +22,34 @@ function Wait-ProjectSessionTeardown {
     }
 }
 
+function Get-ProjectSessionSupervisor {
+    if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) { return $null }
+    try {
+        $State = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
+        if (-not $State.supervisor -or -not $State.supervisor.pid) { return $null }
+        $Process = Get-Process -Id ([int]$State.supervisor.pid) -ErrorAction SilentlyContinue
+        if (-not $Process) { return $null }
+        $ExpectedPath = [IO.Path]::GetFullPath([string]$State.supervisor.executable)
+        $ActualPath = [IO.Path]::GetFullPath([string]$Process.Path)
+        if (-not $ActualPath.Equals($ExpectedPath, [StringComparison]::OrdinalIgnoreCase)) { return $null }
+        if ([int64]$Process.StartTime.ToUniversalTime().ToFileTimeUtc() -ne [int64]$State.supervisor.creation_filetime) { return $null }
+        return $Process
+    } catch { return $null }
+}
+
+function Test-ProjectSessionRecord {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("owners","components")][string]$Collection,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][int]$ProcessId
+    )
+    if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) { return $false }
+    try {
+        $State = Get-Content -Raw -LiteralPath $script:ProjectSessionStatePath -Encoding UTF8 | ConvertFrom-Json
+        return @($State.$Collection | Where-Object { [string]$_.name -eq $Name -and [int]$_.pid -eq $ProcessId }).Count -gt 0
+    } catch { return $true }
+}
+
 function Request-ProjectSessionTeardown {
     param([Parameter(Mandatory = $true)]$Supervisor, [string]$Reason)
     if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
@@ -62,14 +90,18 @@ function Release-ProjectSessionOwner {
     $Python = Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"
     $SupervisorScript = Join-Path $PSScriptRoot "project-session.py"
     $Runtime = Split-Path -Parent $script:ProjectSessionStatePath
-    $RequestPath = Join-Path $Runtime ("project-session-release-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
-    @{ owners = @(@{ name = $OwnerName; pid = $PID }) } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
-    try {
-        & $Python $SupervisorScript release-owner --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
-        if ($LASTEXITCODE -notin @(0,3)) { throw "Unable to release the project-session startup owner (exit $LASTEXITCODE)." }
-    } finally {
-        Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+    for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+        $RequestPath = Join-Path $Runtime ("project-session-release-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
+        @{ owners = @(@{ name = $OwnerName; pid = $PID }) } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
+        try {
+            & $Python $SupervisorScript release-owner --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
+            if ($LASTEXITCODE -in @(0,3) -and -not (Test-ProjectSessionRecord -Collection owners -Name $OwnerName -ProcessId $PID)) { return }
+        } finally {
+            Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 150
     }
+    throw "Unable to confirm release of project-session owner '$OwnerName' after 3 attempts."
 }
 
 function Release-ProjectSessionComponent {
@@ -81,14 +113,18 @@ function Release-ProjectSessionComponent {
     $Python = Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"
     $SupervisorScript = Join-Path $PSScriptRoot "project-session.py"
     $Runtime = Split-Path -Parent $script:ProjectSessionStatePath
-    $RequestPath = Join-Path $Runtime ("project-session-release-component-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
-    @{ components = @(@{ name = $ComponentName; pid = $ProcessId }) } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
-    try {
-        & $Python $SupervisorScript release-component --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
-        if ($LASTEXITCODE -notin @(0,3)) { throw "Unable to release the project-session startup component (exit $LASTEXITCODE)." }
-    } finally {
-        Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+    for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+        $RequestPath = Join-Path $Runtime ("project-session-release-component-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
+        @{ components = @(@{ name = $ComponentName; pid = $ProcessId }) } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
+        try {
+            & $Python $SupervisorScript release-component --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
+            if ($LASTEXITCODE -in @(0,3) -and -not (Test-ProjectSessionRecord -Collection components -Name $ComponentName -ProcessId $ProcessId)) { return }
+        } finally {
+            Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 150
     }
+    throw "Unable to confirm release of project-session component '$ComponentName' after 3 attempts."
 }
 
 function Start-ManagedProjectProcess {
@@ -103,17 +139,23 @@ function Start-ManagedProjectProcess {
         [string]$RedirectStandardError = ""
     )
     $Python = Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"
+    $BootstrapPython = (& $Python -c "import sys; print(sys._base_executable)").Trim()
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $BootstrapPython)) {
+        throw "Unable to resolve the project base Python for managed bootstrap."
+    }
     $HelperScript = Join-Path $PSScriptRoot "project-process.py"
     $Runtime = Join-Path $script:ProjectRoot "runtime"
     $Token = "{0}-{1}" -f $PID,[Guid]::NewGuid().ToString("N")
     $RequestPath = Join-Path $Runtime "project-process-$Token.json"
     $GoPath = Join-Path $Runtime "project-process-$Token.go"
+    $ReadyPath = Join-Path $Runtime "project-process-$Token.ready.json"
     $ResultPath = Join-Path $Runtime "project-process-$Token.result.json"
     $ReleasePath = Join-Path $Runtime "project-process-$Token.release"
-    $DonePath = Join-Path $Runtime "project-process-$Token.done"
     $BootstrapName = "$Name bootstrap $Token"
+    $BootstrapLauncher = $null
     $Bootstrap = $null
     $Process = $null
+    $ResumeRequested = $false
     [ordered]@{
         file_path = [IO.Path]::GetFullPath($FilePath)
         arguments = @($ArgumentList)
@@ -124,7 +166,15 @@ function Start-ManagedProjectProcess {
         stderr = $RedirectStandardError
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
     try {
-        $Bootstrap = Start-Process -FilePath $Python -ArgumentList @($HelperScript,"--request",$RequestPath,"--go",$GoPath,"--result",$ResultPath,"--release",$ReleasePath,"--done",$DonePath,"--state",$script:ProjectSessionStatePath) -WorkingDirectory $script:ProjectRoot -WindowStyle Hidden -PassThru
+        $BootstrapLauncher = Start-Process -FilePath $BootstrapPython -ArgumentList @($HelperScript,"--request",$RequestPath,"--ready",$ReadyPath,"--go",$GoPath,"--result",$ResultPath,"--release",$ReleasePath,"--state",$script:ProjectSessionStatePath) -WorkingDirectory $script:ProjectRoot -WindowStyle Hidden -PassThru
+        $Deadline = (Get-Date).AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $ReadyPath) -and (Get-Date) -lt $Deadline) {
+            if ($BootstrapLauncher.HasExited) { throw "$Name bootstrap exited before joining the project Job." }
+            Start-Sleep -Milliseconds 50
+        }
+        if (-not (Test-Path -LiteralPath $ReadyPath)) { throw "$Name bootstrap did not join the project Job." }
+        $Ready = Get-Content -Raw -LiteralPath $ReadyPath -Encoding UTF8 | ConvertFrom-Json
+        $Bootstrap = Get-Process -Id ([int]$Ready.pid) -ErrorAction Stop
         $null = Start-OrJoin-ProjectSession -Components @(@{ name = $BootstrapName; pid = $Bootstrap.Id })
         New-Item -ItemType File -Path $GoPath -Force | Out-Null
         $Deadline = (Get-Date).AddSeconds(30)
@@ -136,30 +186,28 @@ function Start-ManagedProjectProcess {
         $Result = Get-Content -Raw -LiteralPath $ResultPath -Encoding UTF8 | ConvertFrom-Json
         $Process = Get-Process -Id ([int]$Result.pid) -ErrorAction Stop
         $null = Start-OrJoin-ProjectSession -Components @(@{ name = $Name; pid = $Process.Id })
-        New-Item -ItemType File -Path $ReleasePath -Force | Out-Null
-        $Deadline = (Get-Date).AddSeconds(10)
-        do {
-            if ($Bootstrap.HasExited) { throw "$Name bootstrap exited before resuming the process." }
-            $Result = Get-Content -Raw -LiteralPath $ResultPath -Encoding UTF8 | ConvertFrom-Json
-            if (-not $Result.resumed) { Start-Sleep -Milliseconds 50 }
-        } while (-not $Result.resumed -and (Get-Date) -lt $Deadline)
-        if (-not $Result.resumed) { throw "$Name bootstrap did not confirm process resume." }
         Release-ProjectSessionComponent -ComponentName $BootstrapName -ProcessId $Bootstrap.Id
-        New-Item -ItemType File -Path $DonePath -Force | Out-Null
+        New-Item -ItemType File -Path $ReleasePath -Force | Out-Null
+        $ResumeRequested = $true
         try { Wait-Process -Id $Bootstrap.Id -Timeout 10 -ErrorAction SilentlyContinue } catch { }
+        try { Wait-Process -Id $BootstrapLauncher.Id -Timeout 5 -ErrorAction SilentlyContinue } catch { }
+        $BootstrapLauncher.Refresh()
+        if ($BootstrapLauncher.HasExited -and $BootstrapLauncher.ExitCode -ne 0) { throw "$Name bootstrap failed to resume the managed process (exit $($BootstrapLauncher.ExitCode))." }
+        if (-not $BootstrapLauncher.HasExited) { Write-Warning "$Name bootstrap launcher is still exiting; the managed target remains registered." }
         return $Process
     } catch {
-        if ($Process -and -not $Process.HasExited) { Stop-Process -Id $Process.Id -ErrorAction SilentlyContinue }
+        if (-not $ResumeRequested -and $Process -and -not $Process.HasExited) { Stop-Process -Id $Process.Id -ErrorAction SilentlyContinue }
         if ($Bootstrap -and -not $Bootstrap.HasExited) { Stop-Process -Id $Bootstrap.Id -ErrorAction SilentlyContinue }
+        if ($BootstrapLauncher -and -not $BootstrapLauncher.HasExited) { Stop-Process -Id $BootstrapLauncher.Id -ErrorAction SilentlyContinue }
         throw
     } finally {
-        Remove-Item -LiteralPath $RequestPath,$GoPath,$ResultPath,$ReleasePath,$DonePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $RequestPath,$ReadyPath,$GoPath,$ResultPath,$ReleasePath -Force -ErrorAction SilentlyContinue
     }
 }
 
 function Start-OrJoin-ProjectSession {
     param(
-        [Parameter(Mandatory = $true)][array]$Components,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][array]$Components,
         [string]$OwnerName = "launcher",
         [switch]$MonitorOwner
     )
@@ -171,10 +219,10 @@ function Start-OrJoin-ProjectSession {
     $Logs = Join-Path $script:ProjectRoot "logs"
     New-Item -ItemType Directory -Force -Path $Runtime,$Logs | Out-Null
     $RequestPath = Join-Path $Runtime ("project-session-request-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
-    $Request = [ordered]@{
-        owners = if ($MonitorOwner) { @(@{ name = $OwnerName; pid = $PID }) } else { @() }
-        components = @($Components | ForEach-Object { @{ name = [string]$_.name; pid = [int]$_.pid } })
-    }
+    [object[]]$OwnerRecords = @()
+    if ($MonitorOwner) { $OwnerRecords = ,@{ name = $OwnerName; pid = $PID } }
+    [object[]]$ComponentRecords = @($Components | ForEach-Object { @{ name = [string]$_.name; pid = [int]$_.pid } })
+    $Request = [ordered]@{ owners = $OwnerRecords; components = $ComponentRecords }
     $Request | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
 
     try {

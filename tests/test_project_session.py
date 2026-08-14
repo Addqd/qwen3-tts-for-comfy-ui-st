@@ -25,7 +25,16 @@ def _load_supervisor_module():
     return module
 
 
+def _load_process_helper_module():
+    spec = importlib.util.spec_from_file_location("project_process", PROCESS_HELPER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
 SESSION = _load_supervisor_module() if os.name == "nt" else None
+PROCESS = _load_process_helper_module() if os.name == "nt" else None
 
 
 def _wait(predicate, timeout: float = 10) -> None:
@@ -180,6 +189,31 @@ def test_owner_exit_terminates_managed_components(tmp_path):
                 process.wait(timeout=5)
 
 
+def test_ensure_attaches_components_to_an_existing_live_session(tmp_path):
+    _prepare_cleanup_scripts(tmp_path)
+    owner, component = _sleeping_process(), _sleeping_process()
+    state = tmp_path / "project-session.json"
+    initial = tmp_path / "initial.json"
+    initial.write_text(json.dumps({
+        "owners": [{"name": "launcher", "pid": owner.pid}], "components": [],
+    }), encoding="utf-8")
+    assert subprocess.run(_session_command("ensure", tmp_path, initial, state), timeout=20).returncode == 0
+    attach = tmp_path / "ensure-component.json"
+    attach.write_text(json.dumps({
+        "owners": [], "components": [{"name": "component", "pid": component.pid}],
+    }), encoding="utf-8")
+    try:
+        assert subprocess.run(_session_command("ensure", tmp_path, attach, state), timeout=20).returncode == 0
+        persisted = json.loads(state.read_text(encoding="utf-8"))
+        assert [item["name"] for item in persisted["components"]] == ["component"]
+    finally:
+        owner.terminate()
+        owner.wait(timeout=5)
+        if component.poll() is None:
+            component.wait(timeout=15)
+        _wait(lambda: not state.exists(), timeout=15)
+
+
 @pytest.mark.parametrize("payload", ["{", "[]", "{}", '{"schema":1}', '{"schema":1,"job_name":"x"}'])
 def test_attach_treats_corrupt_or_incomplete_state_as_stale(tmp_path, payload):
     state = tmp_path / "project-session.json"
@@ -250,12 +284,30 @@ def test_partial_attach_persists_assigned_component_and_requests_teardown(tmp_pa
     assert not request.exists()
 
 
+def test_cleanup_preserves_state_when_force_termination_cannot_remove_survivors(tmp_path, monkeypatch):
+    (tmp_path / "logs").mkdir()
+    state = tmp_path / "project-session.json"
+    state.write_text("diagnostic", encoding="utf-8")
+    survivor = {"name": "facade", "pid": 123, "creation_filetime": 1, "executable": "python.exe"}
+    monkeypatch.setattr(SESSION.subprocess, "run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(SESSION, "_same_process", lambda _record: True)
+    monkeypatch.setattr(SESSION.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(SESSION.time, "monotonic", iter([0, 6, 6, 12]).__next__)
+    monkeypatch.setattr(SESSION, "kernel32", type("Kernel", (), {
+        "TerminateJobObject": staticmethod(lambda *_args: False),
+    })())
+    assert SESSION._cleanup(tmp_path, state, "session", 1, [survivor]) is False
+    assert state.read_text(encoding="utf-8") == "diagnostic"
+
+
 def test_launcher_owner_and_stop_waiting_are_conditionally_scoped():
     combined = (ROOT / "scripts" / "start-tts-and-comfyui.ps1").read_text(encoding="utf-8-sig")
     backend = (ROOT / "start.ps1").read_text(encoding="utf-8-sig")
     comfy = (ROOT / "scripts" / "start-comfyui.ps1").read_text(encoding="utf-8-sig")
     stop_backend = (ROOT / "stop.ps1").read_text(encoding="utf-8-sig")
     stop_comfy = (ROOT / "scripts" / "stop-comfyui.ps1").read_text(encoding="utf-8-sig")
+    session_common = (ROOT / "scripts" / "session-common.ps1").read_text(encoding="utf-8-sig")
+    process_helper = (ROOT / "scripts" / "project-process.py").read_text(encoding="utf-8-sig")
     assert combined.index('Start-OrJoin-ProjectSession -OwnerName "combined launcher" -MonitorOwner -Components @()') < combined.index('start-comfyui.ps1')
     assert backend.index('Start-OrJoin-ProjectSession -OwnerName "backend startup" -MonitorOwner -Components @()') < backend.index("Start-ManagedProjectProcess")
     assert "Start-ManagedProjectProcess" in comfy
@@ -273,6 +325,11 @@ def test_launcher_owner_and_stop_waiting_are_conditionally_scoped():
     assert "Release-ProjectSessionComponent" not in comfy
     assert "Test-ProjectSessionComponent" in stop_backend and "Wait-ProjectSessionTeardown" in stop_backend
     assert "Test-ProjectSessionComponent" in stop_comfy and "Wait-ProjectSessionTeardown" in stop_comfy
+    assert session_common.count("for ($Attempt = 1; $Attempt -le 3; $Attempt++)") == 2
+    assert session_common.count("Test-ProjectSessionRecord") >= 3
+    assert session_common.index("Release-ProjectSessionComponent -ComponentName $BootstrapName") < session_common.index("New-Item -ItemType File -Path $ReleasePath")
+    assert 'parser.add_argument("--done"' not in process_helper
+    assert "if created and not resumed:" in process_helper
 
 
 def test_reused_comfyui_schema_is_validated_before_job_attachment():
@@ -449,12 +506,12 @@ def test_bootstrap_exit_after_child_creation_leaves_no_orphan(tmp_path):
     initial.write_text(json.dumps({"owners": [{"name": "test owner", "pid": os.getpid()}], "components": []}), encoding="utf-8")
     assert subprocess.run(_session_command("ensure", tmp_path, initial, state), check=False, timeout=20).returncode == 0
     request = tmp_path / "process.json"
+    ready = tmp_path / "process.ready"
     go = tmp_path / "process.go"
     result = tmp_path / "process-result.json"
     release = tmp_path / "process.release"
-    done = tmp_path / "process.done"
     request.write_text(json.dumps({
-        "file_path": sys.executable,
+        "file_path": sys._base_executable,
         "arguments": ["-c", "import time; time.sleep(60)"],
         "working_directory": str(tmp_path),
         "environment": {},
@@ -463,12 +520,24 @@ def test_bootstrap_exit_after_child_creation_leaves_no_orphan(tmp_path):
         "stderr": "",
     }), encoding="utf-8")
     helper = subprocess.Popen([
-        sys.executable, str(PROCESS_HELPER), "--request", str(request), "--go", str(go),
-        "--result", str(result), "--release", str(release), "--done", str(done), "--state", str(state),
+        sys.executable, str(PROCESS_HELPER), "--request", str(request), "--ready", str(ready),
+        "--go", str(go), "--result", str(result), "--release", str(release), "--state", str(state),
     ])
     try:
+        _wait(ready.exists)
+        bootstrap_pid = int(json.loads(ready.read_text(encoding="utf-8"))["pid"])
+        persisted = json.loads(state.read_text(encoding="utf-8"))
+        job = SESSION.kernel32.OpenJobObjectW(SESSION.JOB_OBJECT_QUERY, False, persisted["job_name"])
+        helper_handle = SESSION._open_process(bootstrap_pid)
+        try:
+            assigned = SESSION.wintypes.BOOL()
+            assert SESSION.kernel32.IsProcessInJob(helper_handle, job, SESSION.ctypes.byref(assigned))
+            assert assigned.value
+        finally:
+            SESSION.kernel32.CloseHandle(helper_handle)
+            SESSION.kernel32.CloseHandle(job)
         attach_request = tmp_path / "attach-helper.json"
-        attach_request.write_text(json.dumps({"owners": [], "components": [{"name": "bootstrap", "pid": helper.pid}]}), encoding="utf-8")
+        attach_request.write_text(json.dumps({"owners": [], "components": [{"name": "bootstrap", "pid": bootstrap_pid}]}), encoding="utf-8")
         assert subprocess.run(_session_command("attach", tmp_path, attach_request, state), check=False, timeout=20).returncode == 0
         go.touch()
         _wait(result.exists)
@@ -483,11 +552,70 @@ def test_bootstrap_exit_after_child_creation_leaves_no_orphan(tmp_path):
         finally:
             SESSION.kernel32.CloseHandle(child_handle)
             SESSION.kernel32.CloseHandle(job)
-        helper.terminate()
-        helper.wait(timeout=5)
+        supervisor_pid = int(json.loads(state.read_text(encoding="utf-8"))["supervisor"]["pid"])
+        supervisor = subprocess.Popen([sys.executable, "-c", f"import os; os.kill({supervisor_pid}, 15)"])
+        assert supervisor.wait(timeout=5) == 0
+        helper.wait(timeout=10)
         _wait(lambda: not SESSION._same_process(child_record), timeout=15)
-        _wait(lambda: not state.exists(), timeout=15)
+        state.unlink(missing_ok=True)
     finally:
         if helper.poll() is None:
             helper.kill()
             helper.wait(timeout=5)
+
+
+def test_process_helper_accepts_missing_working_directory():
+    assert PROCESS._working_directory({}) is None
+    assert PROCESS._working_directory({"working_directory": ""}) is None
+    assert PROCESS._working_directory({"working_directory": r"C:\work"}) == r"C:\work"
+
+
+def test_powershell_start_or_join_component_path_and_user_shell_survival(tmp_path):
+    state = tmp_path / "project-session.json"
+    powershell = Path(os.environ["SystemRoot"]) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    command = (
+        f"$ErrorActionPreference='Stop'; $script:ProjectRoot='{ROOT}'; "
+        f". '{ROOT / 'scripts' / 'session-common.ps1'}'; "
+        f"$script:ProjectSessionStatePath='{state}'; "
+        "$null=Start-OrJoin-ProjectSession -OwnerName 'test shell' -MonitorOwner -Components @(); "
+        "$child=Start-Process -FilePath $env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe "
+        "-ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 60') -WindowStyle Hidden -PassThru; "
+        "try { $null=Start-OrJoin-ProjectSession -Components @(@{name='wrapper child';pid=$child.Id}); "
+        f"$s=Get-Content -Raw -LiteralPath '{state}' -Encoding UTF8|ConvertFrom-Json; "
+        "if (@($s.components|Where-Object {$_.name -eq 'wrapper child'}).Count -ne 1) { exit 12 }; "
+        "Stop-Process -Id $child.Id; $child.WaitForExit(); "
+        f"$d=(Get-Date).AddSeconds(15); while((Test-Path -LiteralPath '{state}') -and (Get-Date)-lt $d){{Start-Sleep -Milliseconds 100}}; "
+        f"if(Test-Path -LiteralPath '{state}'){{exit 13}}; Write-Output 'shell-survived' "
+        "} finally { if(-not $child.HasExited){Stop-Process -Id $child.Id -ErrorAction SilentlyContinue} }"
+    )
+    completed = subprocess.run(
+        [str(powershell), "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        cwd=ROOT, capture_output=True, text=True, timeout=40,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "shell-survived" in completed.stdout
+
+
+def test_powershell_managed_process_handshake_resumes_target_and_releases_bootstrap(tmp_path):
+    state = tmp_path / "project-session.json"
+    powershell = Path(os.environ["SystemRoot"]) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    command = (
+        f"$ErrorActionPreference='Stop'; $script:ProjectRoot='{ROOT}'; "
+        f". '{ROOT / 'scripts' / 'session-common.ps1'}'; $script:ProjectSessionStatePath='{state}'; "
+        "$null=Start-OrJoin-ProjectSession -OwnerName 'managed test shell' -MonitorOwner -Components @(); "
+        "$managed=Start-ManagedProjectProcess -Name 'managed target' -FilePath $env:SystemRoot\\System32\\PING.EXE "
+        f"-ArgumentList @('-n','60','127.0.0.1') -WorkingDirectory '{tmp_path}' -Hidden; "
+        "if($managed.HasExited){exit 21}; "
+        f"$s=Get-Content -Raw -LiteralPath '{state}' -Encoding UTF8|ConvertFrom-Json; "
+        "if(@($s.components|Where-Object {$_.name -like 'managed target bootstrap*'}).Count -ne 0){exit 22}; "
+        "if(@($s.components|Where-Object {$_.name -eq 'managed target'}).Count -ne 1){exit 23}; "
+        "Stop-Process -Id $managed.Id; $managed.WaitForExit(); "
+        f"$d=(Get-Date).AddSeconds(15); while((Test-Path -LiteralPath '{state}') -and (Get-Date)-lt $d){{Start-Sleep -Milliseconds 100}}; "
+        f"if(Test-Path -LiteralPath '{state}'){{exit 24}}; Write-Output 'managed-handshake-ok'"
+    )
+    completed = subprocess.run(
+        [str(powershell), "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+        cwd=ROOT, capture_output=True, text=True, timeout=45,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "managed-handshake-ok" in completed.stdout

@@ -104,7 +104,7 @@ def test_whole_context_te_preserves_manual_terms_and_stress_ignores_them(monkeyp
         @staticmethod
         def enhance_text(text, language):
             calls["te"].append((text, language))
-            return text.replace("Qwen", "changed")
+            return text
 
     def stress(text, **kwargs):
         calls["stress"].append((text, kwargs["words_to_ignore"]))
@@ -119,7 +119,7 @@ def test_whole_context_te_preserves_manual_terms_and_stress_ignores_them(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_te_that_adds_a_protected_occurrence_is_rejected_without_request_failure(tmp_path, monkeypatch):
+async def test_te_that_adds_a_protected_occurrence_is_a_backend_failure(tmp_path, monkeypatch):
     config = load_config()
     config.data["voices"]["library_dir"] = str(tmp_path / "voices")
     config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")
@@ -138,9 +138,8 @@ async def test_te_that_adds_a_protected_occurrence_is_rejected_without_request_f
 
     monkeypatch.setattr(service.silero, "_load_te", lambda: TE())
     request = SimpleNamespace(input="Qwen работает", pronunciation_overrides={}, russian_normalization=None)
-    prepared, replacements, *_rest = await service._prepare_text(request, service.settings.current())
-    assert prepared == "куэн работает"
-    assert replacements == 1
+    with pytest.raises(SileroPreprocessingError, match="changed a protected pronunciation term"):
+        await service._prepare_text(request, service.settings.current())
     await service.client.aclose()
 
 
@@ -172,13 +171,15 @@ def _silero_assets(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     }), encoding="utf-8")
     state = tmp_path / "provisioned.json"
     state.write_text(json.dumps({
-        "schema": 2,
+        "schema": 3,
         "catalogue": str(catalogue),
         "catalogue_revision": "pinned",
         "catalogue_sha256": digests[str(catalogue)],
         "te_model": str(te_model),
         "te_model_sha256": digests[str(te_model)],
         "model_files": [str(catalogue), str(te_model), str(stress_model)],
+        "stress_assets": [str(stress_model)],
+        "text_enhancement_assets": [str(catalogue), str(te_model)],
         "asset_sha256": digests,
     }), encoding="utf-8")
     return state, provenance, catalogue, te_model, stress_model
@@ -193,7 +194,7 @@ def test_stress_verification_does_not_depend_on_te_asset(tmp_path):
 def test_stress_verification_rejects_empty_stress_asset_set(tmp_path):
     state, provenance, catalogue, te_model, _stress_model = _silero_assets(tmp_path)
     payload = json.loads(state.read_text(encoding="utf-8"))
-    payload["model_files"] = [str(catalogue), str(te_model)]
+    payload["stress_assets"] = []
     state.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(SileroPreprocessingError, match="Silero Stress assets are missing"):
         SileroPreprocessor(state, provenance)._require_provisioned("stress")
@@ -240,19 +241,76 @@ def test_provisioned_catalogue_and_model_digests_are_verified(tmp_path):
     }), encoding="utf-8")
     state = tmp_path / "provisioned.json"
     state.write_text(json.dumps({
-        "schema": 2,
+        "schema": 3,
         "catalogue": str(catalogue),
         "catalogue_revision": "pinned",
         "catalogue_sha256": catalogue_hash,
         "te_model": str(te_model),
         "te_model_sha256": te_hash,
         "model_files": [str(catalogue), str(te_model)],
+        "stress_assets": [],
+        "text_enhancement_assets": [str(catalogue), str(te_model)],
         "asset_sha256": {str(catalogue): catalogue_hash, str(te_model): te_hash},
     }), encoding="utf-8")
     SileroPreprocessor(state, provenance)._require_provisioned("text_enhancement")
     catalogue.write_bytes(b"tampered")
     with pytest.raises(SileroPreprocessingError, match="integrity validation failed"):
         SileroPreprocessor(state, provenance)._require_provisioned("text_enhancement")
+
+
+def test_failed_stress_load_does_not_poison_lazy_cache(monkeypatch, tmp_path):
+    runtime = SileroPreprocessor(tmp_path / "unused.json")
+    monkeypatch.setattr(runtime, "_require_provisioned", lambda _component: None)
+    monkeypatch.setattr(runtime, "_configure_torch", lambda: object())
+    calls = 0
+
+    class StressModule:
+        @staticmethod
+        def load_accentor():
+            nonlocal calls
+            calls += 1
+            return None if calls == 1 else (lambda text, **_kwargs: text)
+
+    monkeypatch.setattr(silero_module.importlib, "import_module", lambda _name: StressModule())
+    with pytest.raises(SileroPreprocessingError, match="invalid accentor"):
+        runtime._load_stress()
+    assert runtime._stress is None
+    assert callable(runtime._load_stress())
+    assert calls == 2
+
+
+def test_text_enhancement_loader_rejects_runtime_download_and_remains_retryable(monkeypatch, tmp_path):
+    runtime = SileroPreprocessor(tmp_path / "unused.json")
+    monkeypatch.setattr(runtime, "_require_provisioned", lambda _component: None)
+
+    class Hub:
+        @staticmethod
+        def download_url_to_file(*_args, **_kwargs):
+            return None
+
+    torch = SimpleNamespace(hub=Hub())
+    monkeypatch.setattr(runtime, "_configure_torch", lambda: torch)
+
+    mode = {"download": True}
+
+    class TE:
+        @staticmethod
+        def enhance_text(text, _language):
+            return text
+
+    class TEModule:
+        @staticmethod
+        def silero_te():
+            if mode["download"]:
+                torch.hub.download_url_to_file("https://example.invalid/model", "model")
+            return TE()
+
+    monkeypatch.setattr(silero_module.importlib, "import_module", lambda _name: TEModule())
+    with pytest.raises(SileroPreprocessingError, match="attempted a network download"):
+        runtime._load_te()
+    assert runtime._te is None
+    mode["download"] = False
+    assert isinstance(runtime._load_te(), TE)
 
 
 def test_silero_catalogue_is_commit_pinned_with_known_digest():

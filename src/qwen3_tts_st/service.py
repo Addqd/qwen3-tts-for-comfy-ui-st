@@ -12,10 +12,10 @@ from typing import Any
 
 import httpx
 
-from .normalization import apply_pronunciation, merge_pronunciation, normalize_russian_text, split_pronunciation_spans
+from .normalization import apply_pronunciation, merge_pronunciation, normalize_russian_text
 from .preprocess import preprocess
 from .runtime_settings import RuntimeSettingsStore
-from .silero_preprocessing import SileroPreprocessor
+from .silero_preprocessing import SileroPreprocessingError, SileroPreprocessor
 from .voices import VoiceLibrary
 
 
@@ -30,11 +30,9 @@ class TTSService:
         self.qwentts_url = f"http://127.0.0.1:{int(config.get('qwentts.port', 8030))}"
         self.qwentts_state_path = config.path("qwentts.state_file", "runtime/qwentts.json")
         self.client = httpx.AsyncClient(base_url=self.qwentts_url, timeout=float(config.get("qwentts.request_timeout_seconds", 900)))
-        provenance_path = config.path("qwentts.provenance_file", "config/qwentts-runtime.json")
-        try:
-            self.engine_revision = str(json.loads(provenance_path.read_text(encoding="utf-8"))["upstream"]["revision"])
-        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-            self.engine_revision = "unknown"
+        self.engine_revision = str(config.qwentts_manifest()["upstream"]["revision"])
+        self.model_id = config.qwentts_model_id()
+        self.language = config.qwentts_language()
         self.lock = asyncio.Lock()
         self.lock_timeout_seconds = float(config.get("qwentts.queue_timeout_seconds", 30))
         self.started_at = time.time()
@@ -45,8 +43,11 @@ class TTSService:
     async def startup(self) -> None:
         health = await self.client.get("/health")
         health.raise_for_status()
-        await self.library.register_all(self.client)
-        self.library.resolve(self.default_voice)
+        await self.library.register_all(self.client, required_voice=self.default_voice)
+        try:
+            self.library.resolve(self.default_voice)
+        except (KeyError, FileNotFoundError, RuntimeError) as exc:
+            raise RuntimeError(f"Required default voice is unavailable: {self.default_voice}") from exc
 
     async def shutdown(self) -> None:
         await self.client.aclose()
@@ -89,7 +90,7 @@ class TTSService:
             "status": "ok" if qwentts_ready else "degraded",
             "engine": "qwentts.cpp",
             "engine_revision": self.engine_revision,
-            "model": "tts-1-ru",
+            "model": self.model_id,
             "model_variant": "bf16",
             "model_file": self.talker_model.name,
             "device": device,
@@ -158,7 +159,7 @@ class TTSService:
     async def _prepare_text(self, request: Any, current: dict[str, Any]) -> tuple[str, int, str, float, float]:
         prepared = preprocess(request.input, dict(self.config.get("preprocessing", {}) or {}))
         pronunciation = merge_pronunciation(current["pronunciation_defaults"], request.pronunciation_overrides)
-        _, expected_replacements = split_pronunciation_spans(prepared, pronunciation)
+        _, expected_replacements = apply_pronunciation(prepared, pronunciation)
         automatic_enabled = current["auto_stress"] != "off" or current["text_enhancement"] != "off"
         stress_seconds = 0.0
         te_seconds = 0.0
@@ -175,7 +176,7 @@ class TTSService:
             te_seconds = timings["text_enhancement_seconds"]
         prepared, replacements = apply_pronunciation(prepared, pronunciation)
         if replacements != expected_replacements:
-            raise ValueError("Manual pronunciation terms changed during automatic preprocessing")
+            raise SileroPreprocessingError("Automatic preprocessing changed protected pronunciation terms")
         self.silero.record_timings(stress_seconds, te_seconds)
         normalization = request.russian_normalization or current["russian_normalization"]
         prepared = normalize_russian_text(prepared, normalization)
@@ -192,7 +193,7 @@ class TTSService:
                 current = self.settings.current()
                 prepared, replacements, normalization, stress_seconds, te_seconds = await self._prepare_text(request, current)
                 payload = {
-                    "model": "tts-1-ru",
+                    "model": self.model_id,
                     "voice": voice,
                     "input": prepared,
                     "response_format": "wav",
@@ -212,10 +213,10 @@ class TTSService:
                 metadata = {
                     "duration_seconds": duration,
                     "segments": 1,
-                    "model": "tts-1-ru",
+                    "model": self.model_id,
                     "engine": "qwentts.cpp",
                     "voice": voice,
-                    "language": "Russian",
+                    "language": self.language,
                     "russian_normalization": normalization,
                     "auto_stress": current["auto_stress"],
                     "stress_format": current["stress_format"],
