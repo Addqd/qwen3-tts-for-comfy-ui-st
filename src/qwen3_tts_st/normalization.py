@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Mapping
+
+
+@dataclass(frozen=True)
+class PronunciationSpan:
+    text: str
+    replacement: str | None = None
 
 
 def parse_pronunciation_overrides(value: Any) -> dict[str, str]:
@@ -29,20 +36,47 @@ def parse_pronunciation_overrides(value: Any) -> dict[str, str]:
 def merge_pronunciation(*values: Any) -> dict[str, str]:
     result: dict[str, str] = {}
     for value in values:
-        result.update(parse_pronunciation_overrides(value))
+        for source, replacement in parse_pronunciation_overrides(value).items():
+            folded = source.casefold()
+            result = {key: existing for key, existing in result.items() if key.casefold() != folded}
+            result[source] = replacement
     return result
 
 
 def apply_pronunciation(text: str, dictionary: Mapping[str, str]) -> tuple[str, int]:
-    result = text
+    if not dictionary:
+        return text, 0
+    value = text
     count = 0
     for source in sorted(dictionary, key=len, reverse=True):
-        replacement = dictionary[source]
-        result, changed = re.subn(
-            re.escape(source), lambda _match, literal=replacement: literal, result, flags=re.I
+        value, replaced = re.subn(
+            re.escape(source),
+            lambda _match, replacement=dictionary[source]: replacement,
+            value,
+            flags=re.I,
         )
-        count += changed
-    return result, count
+        count += replaced
+    return value, count
+
+
+def split_pronunciation_spans(text: str, dictionary: Mapping[str, str]) -> tuple[list[PronunciationSpan], int]:
+    if not dictionary:
+        return [PronunciationSpan(text)], 0
+    sources = sorted(dictionary, key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(source) for source in sources), re.I)
+    replacements = {source.casefold(): replacement for source, replacement in dictionary.items()}
+    spans: list[PronunciationSpan] = []
+    cursor = 0
+    count = 0
+    for match in pattern.finditer(text):
+        if match.start() > cursor:
+            spans.append(PronunciationSpan(text[cursor:match.start()]))
+        spans.append(PronunciationSpan(match.group(0), replacements[match.group(0).casefold()]))
+        cursor = match.end()
+        count += 1
+    if cursor < len(text):
+        spans.append(PronunciationSpan(text[cursor:]))
+    return spans or [PronunciationSpan(text)], count
 
 
 def normalize_russian_text(text: str, mode: str) -> str:

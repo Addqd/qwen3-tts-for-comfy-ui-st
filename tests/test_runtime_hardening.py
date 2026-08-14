@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import importlib.util
 import json
 from pathlib import Path
 import subprocess
 import threading
+from types import SimpleNamespace
+import wave
 
 import pytest
 
 from qwen3_tts_st.config import load_config
-from qwen3_tts_st.normalization import apply_pronunciation
-from qwen3_tts_st.preprocess import preprocess
+from qwen3_tts_st.normalization import apply_pronunciation, merge_pronunciation
+from qwen3_tts_st.preprocess import preprocess, split_long_text
 from qwen3_tts_st.runtime_settings import RuntimeSettingsStore
 from qwen3_tts_st.service import TTSService
 from qwen3_tts_st.voices import VoiceLibrary
@@ -40,9 +43,11 @@ class RecordingClient:
 def write_profile(root: Path, ref_text: str = "old") -> Path:
     target = root / "profiles" / "voice"
     target.mkdir(parents=True)
+    variant = target / "variants" / "bf16"
+    variant.mkdir(parents=True)
     (target / "reference.wav").write_bytes(b"old-wav")
-    (target / "reference.spk").write_bytes(b"old-spk")
-    (target / "reference.rvq").write_bytes(b"old-rvq")
+    (variant / "reference.spk").write_bytes(b"old-spk")
+    (variant / "reference.rvq").write_bytes(b"old-rvq")
     (target / "metadata.json").write_text(json.dumps({
         "profile_id": "voice", "display_name": "voice", "character": "Voice",
         "reference_audio": "reference.wav", "ref_text": ref_text, "language": "Russian",
@@ -50,8 +55,9 @@ def write_profile(root: Path, ref_text: str = "old") -> Path:
     return target
 
 
-def fake_encode(reference: Path) -> tuple[Path, Path]:
-    spk, rvq = reference.with_suffix(".spk"), reference.with_suffix(".rvq")
+def fake_encode(_reference: Path, variant_dir: Path) -> tuple[Path, Path]:
+    variant_dir.mkdir(parents=True, exist_ok=True)
+    spk, rvq = variant_dir / "reference.spk", variant_dir / "reference.rvq"
     spk.write_bytes(b"new-spk")
     rvq.write_bytes(b"new-rvq")
     return spk, rvq
@@ -66,9 +72,9 @@ async def test_voice_overwrite_is_prepared_off_loop_and_rolls_back_registration(
     event_thread = threading.get_ident()
     encoding_threads: list[int] = []
 
-    def encode(reference: Path):
+    def encode(reference: Path, variant_dir: Path):
         encoding_threads.append(threading.get_ident())
-        return fake_encode(reference)
+        return fake_encode(reference, variant_dir)
 
     monkeypatch.setattr(library, "_encode", encode)
     client = RecordingClient(fail_ref_text="new")
@@ -90,7 +96,7 @@ async def test_voice_preparation_failure_does_not_mutate_active_profile(tmp_path
     source.write_bytes(b"new-wav")
     library = VoiceLibrary(tmp_path, load_config(ROOT / "config" / "config.example.yaml"))
 
-    def fail_encode(_reference: Path):
+    def fail_encode(_reference: Path, _variant_dir: Path):
         raise RuntimeError("codec failed")
 
     monkeypatch.setattr(library, "_encode", fail_encode)
@@ -141,6 +147,120 @@ def test_conversion_and_literal_replacement_guards(monkeypatch):
     monkeypatch.setattr("qwen3_tts_st.service.subprocess.run", timeout)
     with pytest.raises(RuntimeError, match="FFmpeg conversion timed out"):
         TTSService._convert(b"wav", "mp3", 1)
+
+
+def test_legacy_pronunciation_is_sequential_and_request_override_is_case_insensitive():
+    merged = merge_pronunciation({"Qwen": "first"}, {"qWEN": "AI", "AI": "final"})
+    assert merged == {"qWEN": "AI", "AI": "final"}
+    assert apply_pronunciation("QWEN", merged) == ("final", 2)
+
+
+def test_semantic_chunking_is_bounded_for_russian_and_english():
+    text = ("Русское предложение для проверки. English sentence for the same pipeline! " * 12).strip()
+    chunks = split_long_text(text, 96)
+    assert len(chunks) > 2
+    assert all(len(chunk) <= 96 for chunk in chunks)
+    assert " ".join(chunks) == text
+
+
+@pytest.mark.asyncio
+async def test_long_synthesis_chunks_qwentts_and_stitches_wav(tmp_path):
+    config = load_config(ROOT / "config" / "config.example.yaml")
+    config.data["voices"]["library_dir"] = str(tmp_path / "voices")
+    config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")
+    config.data["qwentts"]["max_chunk_chars"] = 320
+    service = TTSService(config)
+    await service.client.aclose()
+    service.library = SimpleNamespace(resolve=lambda _voice: object())
+
+    def wav_payload(marker: int) -> bytes:
+        output = io.BytesIO()
+        with wave.open(output, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(24000)
+            handle.writeframes(int(marker).to_bytes(2, "little", signed=True) * 64)
+        return output.getvalue()
+
+    class SpeechResponse:
+        def __init__(self, content: bytes):
+            self.content = content
+
+        def raise_for_status(self):
+            return None
+
+    class SpeechClient:
+        def __init__(self):
+            self.payloads: list[dict] = []
+
+        async def post(self, _path: str, json: dict):
+            self.payloads.append(json)
+            return SpeechResponse(wav_payload(len(self.payloads)))
+
+    speech_client = SpeechClient()
+    service.client = speech_client
+    prepared = ("Длинное русское предложение для безопасного синтеза. " * 70).strip()
+
+    async def prepare_text(_request, _current):
+        return prepared, 0, "full", 0.0, 0.0
+
+    service._prepare_text = prepare_text
+    request = SimpleNamespace(
+        voice="clone:test", response_format="wav", speed=1.0,
+        seed=None, max_new_tokens=None, temperature=None, top_k=None, top_p=None,
+        repetition_penalty=None,
+    )
+    output, media_type, metadata = await service.synthesize(request)
+
+    assert len(speech_client.payloads) > 2
+    assert all(len(item["input"]) <= 320 for item in speech_client.payloads)
+    assert " ".join(item["input"] for item in speech_client.payloads) == prepared
+    with wave.open(io.BytesIO(output), "rb") as stitched:
+        assert stitched.getframerate() == 24000
+        assert stitched.getnframes() == 64 * len(speech_client.payloads)
+    assert media_type == "audio/wav"
+    assert metadata["segments"] == len(speech_client.payloads)
+
+
+@pytest.mark.asyncio
+async def test_optional_unreadable_voice_is_isolated_and_not_advertised(tmp_path, monkeypatch):
+    write_profile(tmp_path, "default")
+    optional = tmp_path / "profiles" / "optional"
+    optional.mkdir(parents=True)
+    variant = optional / "variants" / "bf16"
+    variant.mkdir(parents=True)
+    (optional / "reference.wav").write_bytes(b"wav")
+    (variant / "reference.spk").write_bytes(b"spk")
+    (variant / "reference.rvq").write_bytes(b"rvq")
+    (optional / "metadata.json").write_text(json.dumps({
+        "profile_id": "optional", "display_name": "optional", "reference_audio": "reference.wav",
+        "ref_text": "bad", "language": "Russian",
+    }), encoding="utf-8")
+    library = VoiceLibrary(tmp_path, load_config(ROOT / "config" / "config.example.yaml"))
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes(path: Path):
+        if optional in path.parents and path.suffix == ".spk":
+            raise PermissionError("unreadable optional asset")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    registered = await library.register_all(RecordingClient(), required_voice="clone:voice")
+    assert registered == 1
+    assert [item["voice_id"] for item in library.list()] == ["clone:voice"]
+    assert library.failures == [{
+        "voice_id": "clone:optional", "stage": "prepare_or_register", "error": "PermissionError",
+    }]
+    with pytest.raises(RuntimeError, match="unavailable"):
+        library.resolve("clone:optional")
+
+
+@pytest.mark.asyncio
+async def test_required_default_voice_registration_failure_blocks_startup(tmp_path):
+    write_profile(tmp_path, "bad-default")
+    library = VoiceLibrary(tmp_path, load_config(ROOT / "config" / "config.example.yaml"))
+    with pytest.raises(RuntimeError, match="Required default voice failed"):
+        await library.register_all(RecordingClient(fail_ref_text="bad-default"), required_voice="clone:voice")
 
 
 @pytest.mark.asyncio

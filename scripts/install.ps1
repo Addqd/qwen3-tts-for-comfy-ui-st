@@ -31,14 +31,20 @@ try {
     & $VenvPython -m pip install "uv==0.12.2"
     if ($LASTEXITCODE -ne 0) { throw "uv installation failed (exit $LASTEXITCODE)." }
     $env:UV_CACHE_DIR = Join-Path $ProjectRoot ".cache\uv"
+    & $VenvPython -m uv pip install --python $VenvPython --index-url "https://download.pytorch.org/whl/cpu" --reinstall-package torch "torch==2.11.0"
+    if ($LASTEXITCODE -ne 0) { throw "CPU-only PyTorch installation failed (exit $LASTEXITCODE)." }
     & $VenvPython -m uv pip install --python $VenvPython -e "$ProjectRoot[test]"
     if ($LASTEXITCODE -ne 0) { throw "Project dependency installation failed (exit $LASTEXITCODE)." }
     & $VenvPython -m uv pip check
     if ($LASTEXITCODE -ne 0) { throw "Installed dependency validation failed (exit $LASTEXITCODE)." }
     & $VenvPython -c "import fastapi,httpx,pydantic,yaml; import qwen3_tts_st; print('Lightweight facade imports OK')"
     if ($LASTEXITCODE -ne 0) { throw "Lightweight facade import check failed (exit $LASTEXITCODE)." }
-    & (Join-Path $PSScriptRoot "ensure-qwentts-models.ps1") -Config (Join-Path $ProjectRoot "config\config.local.yaml") -AllModels
-    if (-not $SkipRuntimeCheck) { & (Join-Path $PSScriptRoot "verify-qwentts-runtime.ps1") -AllModels | Format-List }
+    & $VenvPython -c "import torch; assert torch.version.cuda is None, 'CUDA PyTorch is not allowed for Silero'; torch.set_num_threads(1); print('Silero PyTorch: CPU only')"
+    if ($LASTEXITCODE -ne 0) { throw "CPU-only PyTorch validation failed (exit $LASTEXITCODE)." }
+    & $VenvPython (Join-Path $PSScriptRoot "provision-silero.py") --output (Join-Path $ProjectRoot "runtime\silero-provisioned.json")
+    if ($LASTEXITCODE -ne 0) { throw "Silero model provisioning failed (exit $LASTEXITCODE)." }
+    & (Join-Path $PSScriptRoot "ensure-qwentts-models.ps1")
+    if (-not $SkipRuntimeCheck) { & (Join-Path $PSScriptRoot "verify-qwentts-runtime.ps1") | Format-List }
     Write-Host "Installation completed. Log: $LogPath"
 } finally {
     Stop-Transcript | Out-Null

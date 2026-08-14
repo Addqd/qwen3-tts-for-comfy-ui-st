@@ -11,9 +11,14 @@ from .normalization import parse_pronunciation_overrides
 class RuntimeSettingsStore:
     def __init__(self, config: Any):
         self.path = config.path("runtime.settings_file", "runtime/tts-settings.json")
+        auto_stress = config.get("runtime_defaults.auto_stress", "silero")
+        text_enhancement = config.get("runtime_defaults.text_enhancement", "off")
         self.defaults = {
             "language": "Russian",
             "russian_normalization": str(config.get("runtime_defaults.russian_normalization", "full")),
+            "auto_stress": "off" if auto_stress is False else str(auto_stress),
+            "stress_format": str(config.get("runtime_defaults.stress_format", "acute")),
+            "text_enhancement": "off" if text_enhancement is False else str(text_enhancement),
             "pronunciation_defaults": dict(config.get("runtime_defaults.pronunciation_defaults", {}) or {}),
             "seed": int(config.get("runtime_defaults.seed", -1)),
             "max_new_tokens": int(config.get("runtime_defaults.max_new_tokens", 4096)),
@@ -41,6 +46,14 @@ class RuntimeSettingsStore:
             raise ValueError("This production runtime uses the Russian qwentts language route")
         if result.get("russian_normalization") not in {"off", "basic", "full"}:
             raise ValueError("russian_normalization must be off, basic, or full")
+        if result.get("auto_stress") not in {"off", "silero"}:
+            raise ValueError("auto_stress must be off or silero")
+        if result.get("stress_format") not in {"plus", "acute", "apostrophe"}:
+            raise ValueError("stress_format must be plus, acute, or apostrophe")
+        if result["stress_format"] in {"plus", "apostrophe"}:
+            result["stress_format"] = "acute"
+        if result.get("text_enhancement") not in {"off", "silero"}:
+            raise ValueError("text_enhancement must be off or silero")
         result["pronunciation_defaults"] = parse_pronunciation_overrides(result.get("pronunciation_defaults"))
         result["seed"] = int(result["seed"])
         result["max_new_tokens"] = int(result["max_new_tokens"])

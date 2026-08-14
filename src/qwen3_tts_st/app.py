@@ -11,7 +11,7 @@ import wave
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .config import AppConfig, load_config
 from .normalization import parse_pronunciation_overrides
@@ -52,9 +52,13 @@ class SpeechRequest(BaseModel):
 
 
 class RuntimeSettingsRequest(BaseModel):
-    model_variant: Literal["bf16", "q8"] | None = None
+    model_config = ConfigDict(extra="forbid")
+
     language: Literal["Russian"] = "Russian"
     russian_normalization: Literal["off", "basic", "full"]
+    auto_stress: Literal["off", "silero"] = "silero"
+    stress_format: Literal["plus", "acute", "apostrophe"] = "acute"
+    text_enhancement: Literal["off", "silero"] = "off"
     pronunciation_defaults: dict[str, str] | str = Field(default_factory=dict)
     seed: int = -1
     max_new_tokens: int = Field(gt=0)
@@ -155,37 +159,24 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
             registered = await app.state.tts.library.register_all(app.state.tts.client)
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=503, detail=f"qwentts registration failed: {exc}") from exc
-        return {"status": "ok", "profile_count": count, "registered": registered}
+        return {
+            "status": "ok" if not app.state.tts.library.failures else "partial",
+            "profile_count": count,
+            "registered": registered,
+            "failures": app.state.tts.library.failures,
+        }
 
     @app.get("/admin/runtime-settings")
     async def runtime_settings():
-        configured = active_config.configured_qwentts_variant()
-        loaded = app.state.tts.model_variant
-        return {"status": "ok", "settings": {
-            "model_variant": configured,
-            "loaded_model_variant": loaded,
-            "model_restart_required": configured != loaded,
-            **app.state.tts.settings.current(),
-        }}
+        return {"status": "ok", "settings": app.state.tts.settings.current()}
 
     @app.put("/admin/runtime-settings")
     async def save_runtime_settings(request: RuntimeSettingsRequest):
         try:
-            changes = request.model_dump()
-            requested_variant = changes.pop("model_variant")
-            configured = active_config.configured_qwentts_variant()
-            if requested_variant is not None:
-                configured = active_config.persist_qwentts_variant(requested_variant)
-            settings = app.state.tts.settings.update(changes)
+            settings = app.state.tts.settings.update(request.model_dump())
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        loaded = app.state.tts.model_variant
-        return {"status": "ok", "settings": {
-            "model_variant": configured,
-            "loaded_model_variant": loaded,
-            "model_restart_required": configured != loaded,
-            **settings,
-        }}
+        return {"status": "ok", "settings": settings}
 
     @app.get("/metrics")
     async def metrics():

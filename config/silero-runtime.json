@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "catalogue": {
+    "repository": "https://github.com/snakers4/silero-models",
+    "revision": "d9355348e2781dc8fa25a135d1602c530afae24c",
+    "url": "https://raw.githubusercontent.com/snakers4/silero-models/d9355348e2781dc8fa25a135d1602c530afae24c/models.yml",
+    "sha256": "64ccc436c72fd8c538e1a37de00301cc164a82c3d8ef0356532fe4c662ed1aa7"
+  },
+  "text_enhancement_model": {
+    "url": "https://models.silero.ai/te_models/v2_4lang_q.pt",
+    "sha256": "c376f114beb5d699bbd6030f09fdb52924f753cc074c242c170fd62869626d4b"
+  }
+}

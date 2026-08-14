@@ -17,8 +17,10 @@ import numpy as np
 CATEGORY = "Qwen TTS API"
 VERSION = "1.0.0"
 PRODUCTION_MODEL = "Qwen3-TTS 1.7B Base (tts-1-ru)"
-MODEL_VARIANTS = ("BF16 Quality (default)", "Q8_0 Fast")
 NORMALIZATION_OPTIONS = ("Use Backend Default", "Off", "Basic Russian", "Full Russian")
+AUTO_STRESS_OPTIONS = ("Off", "Silero Stress")
+STRESS_FORMAT_OPTIONS = ("Combining Acute",)
+TEXT_ENHANCEMENT_OPTIONS = ("Off", "Silero Text Enhancement")
 
 
 def _endpoint(value: str) -> str:
@@ -44,6 +46,12 @@ def _endpoint(value: str) -> str:
 
 def _normalization(value: str) -> str | None:
     return {"Use Backend Default": None, "Off": "off", "Basic Russian": "basic", "Full Russian": "full"}.get(value, value)
+
+
+def _stress_format(value: str) -> str:
+    if value in {"Combining Acute", "Silero +", "Apostrophe"}:
+        return "acute"
+    raise ValueError(f"Unknown stress format: {value}")
 
 
 def _pronunciation(value: str) -> dict[str, str]:
@@ -128,10 +136,6 @@ def _ui_result(name: str, result: tuple, value: Any) -> dict:
     return {"ui": {name: [value]}, "result": result}
 
 
-def _model_variant(value: str) -> str:
-    return "q8" if value == "Q8_0 Fast" else "bf16"
-
-
 class QwenTTSServerNode:
     @classmethod
     def INPUT_TYPES(cls):
@@ -163,9 +167,11 @@ class QwenTTSRuntimeSettingsNode:
             "required": {
                 "server": ("QWEN_TTS_SERVER",),
                 "apply_and_save": ("BOOLEAN", {"default": False}),
-                "model_variant": (list(MODEL_VARIANTS), {"default": "BF16 Quality (default)"}),
                 "language": (["Russian"], {"default": "Russian"}),
                 "russian_normalization": (["Off", "Basic Russian", "Full Russian"], {"default": "Full Russian"}),
+                "auto_stress": (list(AUTO_STRESS_OPTIONS), {"default": "Silero Stress"}),
+                "stress_format": (list(STRESS_FORMAT_OPTIONS), {"default": "Combining Acute"}),
+                "text_enhancement": (list(TEXT_ENHANCEMENT_OPTIONS), {"default": "Off"}),
                 "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647}),
                 "max_new_tokens": ("INT", {"default": 4096, "min": 1, "max": 8192}),
                 "temperature": ("FLOAT", {"default": 0.75, "min": 0.0, "max": 2.0, "step": 0.05}),
@@ -184,13 +190,16 @@ class QwenTTSRuntimeSettingsNode:
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
 
-    def configure(self, server, apply_and_save, model_variant, language, russian_normalization, seed, max_new_tokens,
-                  temperature, top_k, top_p, repetition_penalty, pronunciation_defaults=""):
+    def configure(self, server, apply_and_save, language, russian_normalization, auto_stress, stress_format,
+                  text_enhancement, seed, max_new_tokens, temperature, top_k, top_p, repetition_penalty,
+                  pronunciation_defaults=""):
         if apply_and_save:
             payload = {
-                "model_variant": _model_variant(model_variant),
                 "language": language,
                 "russian_normalization": _normalization(russian_normalization),
+                "auto_stress": "silero" if auto_stress == "Silero Stress" else "off",
+                "stress_format": _stress_format(stress_format),
+                "text_enhancement": "silero" if text_enhancement == "Silero Text Enhancement" else "off",
                 "pronunciation_defaults": _pronunciation(pronunciation_defaults),
                 "seed": int(seed),
                 "max_new_tokens": int(max_new_tokens),

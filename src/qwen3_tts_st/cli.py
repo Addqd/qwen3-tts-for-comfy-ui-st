@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -11,6 +12,8 @@ from .config import load_config
 
 
 def main() -> int:
+    if os.environ.get("QWEN3_TTS_SESSION_INTERNAL") != "1":
+        raise RuntimeError("Direct facade startup is unmanaged; use start.ps1 or start-tts-and-comfyui.bat")
     parser = argparse.ArgumentParser(description="Local qwentts.cpp compatibility service")
     parser.add_argument("--config", default=None)
     args = parser.parse_args()

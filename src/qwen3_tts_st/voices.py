@@ -25,15 +25,14 @@ class VoiceProfile:
     ref_text: str
     language: str
     directory: Path
-    model_variant: str
 
     @property
     def spk_path(self) -> Path:
-        return self.directory / "variants" / self.model_variant / "reference.spk"
+        return self.directory / "variants" / "bf16" / "reference.spk"
 
     @property
     def rvq_path(self) -> Path:
-        return self.directory / "variants" / self.model_variant / "reference.rvq"
+        return self.directory / "variants" / "bf16" / "reference.rvq"
 
     @property
     def ready(self) -> bool:
@@ -46,7 +45,6 @@ class VoiceProfile:
             "display_name": self.display_name,
             "character": self.character,
             "language": self.language,
-            "model_variant": self.model_variant,
             "ref_text": self.ref_text,
             "reference_available": self.reference_path.exists(),
             "spk_available": self.spk_path.exists(),
@@ -68,14 +66,18 @@ class VoiceLibrary:
         self.profiles_root = root / "profiles"
         self.backups_root = root / "backups"
         self.config = config
-        self.model_variant, self.talker_model, self.codec_model = config.qwentts_model()
+        self.talker_model, self.codec_model = config.qwentts_models()
         self.profiles_root.mkdir(parents=True, exist_ok=True)
         self.profiles: dict[str, VoiceProfile] = {}
+        self._unavailable_profile_ids: set[str] = set()
+        self._load_failures: list[dict[str, str]] = []
+        self.failures: list[dict[str, str]] = []
         self._create_lock = asyncio.Lock()
         self.reload()
 
     def reload(self) -> int:
         found: dict[str, VoiceProfile] = {}
+        failures: list[dict[str, str]] = []
         for path in self.profiles_root.rglob("metadata.json"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -90,43 +92,34 @@ class VoiceLibrary:
                     ref_text=str(data.get("ref_text", "")).strip(),
                     language=str(data.get("language", "Russian")),
                     directory=path.parent,
-                    model_variant=self.model_variant,
                 )
-                if self._migrate_legacy_q8_assets(profile.directory):
-                    self._record_variant(profile.directory, "q8")
                 for key in (profile.voice_id, profile.profile_id, profile.display_name):
                     found[key.lower()] = profile
-            except (OSError, KeyError, ValueError, json.JSONDecodeError):
-                continue
+            except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
+                failures.append({"profile": path.parent.name, "stage": "metadata", "error": type(exc).__name__})
         self.profiles = found
+        self._unavailable_profile_ids = set()
+        self._load_failures = failures
+        self.failures = list(failures)
         return len({profile.profile_id for profile in found.values()})
 
     def list(self, ready_only: bool = True) -> list[dict[str, Any]]:
         unique = {profile.profile_id: profile for profile in self.profiles.values()}
-        values = [profile for profile in unique.values() if profile.ready or not ready_only]
+        values = [
+            profile for profile in unique.values()
+            if profile.profile_id not in self._unavailable_profile_ids and (profile.ready or not ready_only)
+        ]
         return [profile.public() for profile in sorted(values, key=lambda item: item.display_name.lower())]
 
     def resolve(self, voice: str) -> VoiceProfile:
         profile = self.profiles.get(voice.lower())
         if profile is None:
             raise KeyError(f"Voice profile not found: {voice}")
+        if profile.profile_id in self._unavailable_profile_ids:
+            raise RuntimeError(f"Voice profile is unavailable in qwentts: {voice}")
         if not profile.ready:
             raise FileNotFoundError(f"Voice profile is not prepared for qwentts: {voice}")
         return profile
-
-    @staticmethod
-    def _migrate_legacy_q8_assets(directory: Path) -> bool:
-        legacy_spk = directory / "reference.spk"
-        legacy_rvq = directory / "reference.rvq"
-        q8 = directory / "variants" / "q8"
-        if legacy_spk.exists() and legacy_rvq.exists() and not (q8 / "reference.spk").exists() and not (q8 / "reference.rvq").exists():
-            q8.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(legacy_spk, q8 / "reference.spk")
-            shutil.copy2(legacy_rvq, q8 / "reference.rvq")
-            legacy_spk.unlink()
-            legacy_rvq.unlink()
-            return True
-        return False
 
     @staticmethod
     def _record_variant(directory: Path, variant: str) -> None:
@@ -143,12 +136,12 @@ class VoiceLibrary:
         temporary.replace(metadata_path)
 
     def _encode(self, reference: Path, variant_dir: Path) -> tuple[Path, Path]:
-        executable = self.config.path("qwentts.codec_executable", "runtime/qwentts/bin/qwen-codec.exe")
+        _server_executable, executable = self.config.qwentts_executables()
         for required in (executable, self.talker_model, self.codec_model):
             if not required.exists():
-                raise FileNotFoundError(f"Required qwentts {self.model_variant} file is missing: {required}")
+                raise FileNotFoundError(f"Required qwentts BF16 file is missing: {required}")
         variant_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=f"qwentts-{self.model_variant}-", dir=reference.parent) as folder:
+        with tempfile.TemporaryDirectory(prefix="qwentts-bf16-", dir=reference.parent) as folder:
             working = Path(folder) / "reference.wav"
             shutil.copy2(reference, working)
             result = subprocess.run(
@@ -171,7 +164,7 @@ class VoiceLibrary:
     async def _prepare(self, profile: VoiceProfile) -> VoiceProfile:
         if not profile.ready and profile.reference_path.exists() and profile.ref_text:
             await asyncio.to_thread(self._encode, profile.reference_path, profile.spk_path.parent)
-            self._record_variant(profile.directory, self.model_variant)
+            self._record_variant(profile.directory, "bf16")
         return profile
 
     @staticmethod
@@ -185,13 +178,31 @@ class VoiceLibrary:
         response = await client.post("/v1/audio/voices", json=payload)
         response.raise_for_status()
 
-    async def register_all(self, client: httpx.AsyncClient) -> int:
+    async def register_all(self, client: httpx.AsyncClient, required_voice: str | None = None) -> int:
         unique = {profile.profile_id: profile for profile in self.profiles.values()}
-        ready = [await self._prepare(profile) for profile in unique.values()]
-        ready = [profile for profile in ready if profile.ready]
-        for profile in ready:
-            await self.register(profile, client)
-        return len(ready)
+        required = required_voice.lower() if required_voice else None
+        registered = 0
+        self._unavailable_profile_ids = set()
+        registration_failures: list[dict[str, str]] = []
+        for profile in unique.values():
+            try:
+                await self._prepare(profile)
+                if not profile.ready:
+                    raise FileNotFoundError("profile assets are incomplete")
+                await self.register(profile, client)
+                registered += 1
+            except Exception as exc:
+                self._unavailable_profile_ids.add(profile.profile_id)
+                registration_failures.append({
+                    "voice_id": profile.voice_id, "stage": "prepare_or_register", "error": type(exc).__name__,
+                })
+                aliases = {profile.voice_id.lower(), profile.profile_id.lower(), profile.display_name.lower()}
+                if required in aliases:
+                    raise RuntimeError(
+                        f"Required default voice failed qwentts registration: {profile.voice_id} ({type(exc).__name__})"
+                    ) from exc
+        self.failures = [*self._load_failures, *registration_failures]
+        return registered
 
     async def create(
         self,
@@ -223,7 +234,7 @@ class VoiceLibrary:
             try:
                 reference = staging / "reference.wav"
                 shutil.copy2(source, reference)
-                variant_dir = staging / "variants" / self.model_variant
+                variant_dir = staging / "variants" / "bf16"
                 await asyncio.to_thread(self._encode, reference, variant_dir)
                 metadata = {
                     "schema": 2,
@@ -235,7 +246,7 @@ class VoiceLibrary:
                     "language": language,
                     "engine": "qwentts.cpp",
                     "voice_assets": {
-                        "variants": {self.model_variant: {"spk": f"variants/{self.model_variant}/reference.spk", "rvq": f"variants/{self.model_variant}/reference.rvq"}},
+                        "variants": {"bf16": {"spk": "variants/bf16/reference.spk", "rvq": "variants/bf16/reference.rvq"}},
                     },
                 }
                 (staging / "metadata.json").write_text(
