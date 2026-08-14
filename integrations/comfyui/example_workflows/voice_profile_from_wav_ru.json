@@ -26,7 +26,7 @@
       "inputs": [{"name": "server", "type": "QWEN_TTS_SERVER", "link": 1}],
       "outputs": [{"name": "server", "type": "QWEN_TTS_SERVER", "links": [2, 3], "slot_index": 0}, {"name": "settings_json", "type": "STRING", "links": null, "slot_index": 1}],
       "properties": {"Node name for S&R": "QwenTTSRuntimeSettings"},
-      "widgets_values": [true, "Russian", "Full Russian", "Silero Stress", "Silero +", "Off", -1, "fixed", 4096, 0.75, 40, 0.9, 1.05, ""]
+      "widgets_values": [true, "Russian", "Full Russian", "Silero Stress", "Combining Acute", "Off", -1, "fixed", 4096, 0.75, 40, 0.9, 1.05, ""]
     },
     {
       "id": 3,

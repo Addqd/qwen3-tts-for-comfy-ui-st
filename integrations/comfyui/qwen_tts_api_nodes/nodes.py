@@ -19,7 +19,7 @@ VERSION = "1.0.0"
 PRODUCTION_MODEL = "Qwen3-TTS 1.7B Base (tts-1-ru)"
 NORMALIZATION_OPTIONS = ("Use Backend Default", "Off", "Basic Russian", "Full Russian")
 AUTO_STRESS_OPTIONS = ("Off", "Silero Stress")
-STRESS_FORMAT_OPTIONS = ("Silero +", "Combining Acute", "Apostrophe")
+STRESS_FORMAT_OPTIONS = ("Combining Acute",)
 TEXT_ENHANCEMENT_OPTIONS = ("Off", "Silero Text Enhancement")
 
 
@@ -46,6 +46,12 @@ def _endpoint(value: str) -> str:
 
 def _normalization(value: str) -> str | None:
     return {"Use Backend Default": None, "Off": "off", "Basic Russian": "basic", "Full Russian": "full"}.get(value, value)
+
+
+def _stress_format(value: str) -> str:
+    if value in {"Combining Acute", "Silero +", "Apostrophe"}:
+        return "acute"
+    raise ValueError(f"Unknown stress format: {value}")
 
 
 def _pronunciation(value: str) -> dict[str, str]:
@@ -164,7 +170,7 @@ class QwenTTSRuntimeSettingsNode:
                 "language": (["Russian"], {"default": "Russian"}),
                 "russian_normalization": (["Off", "Basic Russian", "Full Russian"], {"default": "Full Russian"}),
                 "auto_stress": (list(AUTO_STRESS_OPTIONS), {"default": "Silero Stress"}),
-                "stress_format": (list(STRESS_FORMAT_OPTIONS), {"default": "Silero +"}),
+                "stress_format": (list(STRESS_FORMAT_OPTIONS), {"default": "Combining Acute"}),
                 "text_enhancement": (list(TEXT_ENHANCEMENT_OPTIONS), {"default": "Off"}),
                 "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647}),
                 "max_new_tokens": ("INT", {"default": 4096, "min": 1, "max": 8192}),
@@ -192,9 +198,7 @@ class QwenTTSRuntimeSettingsNode:
                 "language": language,
                 "russian_normalization": _normalization(russian_normalization),
                 "auto_stress": "silero" if auto_stress == "Silero Stress" else "off",
-                "stress_format": {
-                    "Silero +": "plus", "Combining Acute": "acute", "Apostrophe": "apostrophe"
-                }[stress_format],
+                "stress_format": _stress_format(stress_format),
                 "text_enhancement": "silero" if text_enhancement == "Silero Text Enhancement" else "off",
                 "pronunciation_defaults": _pronunciation(pronunciation_defaults),
                 "seed": int(seed),

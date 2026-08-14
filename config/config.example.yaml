@@ -20,7 +20,7 @@ voices:
 runtime_defaults:
   russian_normalization: full
   auto_stress: silero
-  stress_format: plus
+  stress_format: acute
   text_enhancement: "off"
   pronunciation_defaults: {}
   seed: -1

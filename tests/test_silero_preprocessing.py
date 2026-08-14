@@ -78,7 +78,7 @@ async def test_manual_pronunciation_is_protected_and_request_override_wins(tmp_p
     calls = []
 
     def automatic(text, *_settings):
-        calls.append((text, _settings[-1]))
+        calls.append((text, _settings[2], _settings[-1]))
         return f"AUTO[{text}]", {"stress_seconds": 0.01, "text_enhancement_seconds": 0.02}
 
     monkeypatch.setattr(service.silero, "process", automatic)
@@ -90,7 +90,7 @@ async def test_manual_pronunciation_is_protected_and_request_override_wins(tmp_p
     prepared, replacements, _, stress_seconds, te_seconds = await service._prepare_text(request, service.settings.current())
     assert prepared == r"AUTO[До request\1 after]"
     assert replacements == 1
-    assert calls == [("До Qwen after", ["Qwen"])]
+    assert calls == [("До Qwen after", "acute", ["Qwen"])]
     assert stress_seconds == pytest.approx(0.01)
     assert te_seconds == pytest.approx(0.02)
     await service.client.aclose()
@@ -326,7 +326,7 @@ def test_runtime_settings_defaults_persistence_and_old_file_compatibility(tmp_pa
     config.data["runtime"]["settings_file"] = str(tmp_path / "settings.json")
     store = RuntimeSettingsStore(config)
     assert store.current()["auto_stress"] == "silero"
-    assert store.current()["stress_format"] == "plus"
+    assert store.current()["stress_format"] == "acute"
     assert store.current()["text_enhancement"] == "off"
     store.update({"auto_stress": "off", "stress_format": "acute", "text_enhancement": "silero"})
     reloaded = RuntimeSettingsStore(config).current()
@@ -334,7 +334,11 @@ def test_runtime_settings_defaults_persistence_and_old_file_compatibility(tmp_pa
 
     store.path.write_text('{"russian_normalization":"basic"}', encoding="utf-8")
     legacy = RuntimeSettingsStore(config).current()
-    assert (legacy["auto_stress"], legacy["stress_format"], legacy["text_enhancement"]) == ("silero", "plus", "off")
+    assert (legacy["auto_stress"], legacy["stress_format"], legacy["text_enhancement"]) == ("silero", "acute", "off")
+
+    store.path.write_text('{"stress_format":"plus"}', encoding="utf-8")
+    migrated = RuntimeSettingsStore(config).current()
+    assert migrated["stress_format"] == "acute"
 
 
 def test_runtime_settings_api_exposes_new_keys_and_rejects_model_variant(tmp_path, monkeypatch):
@@ -372,5 +376,6 @@ def test_runtime_settings_api_exposes_new_keys_and_rejects_model_variant(tmp_pat
         saved = client.put("/admin/runtime-settings", json=payload)
         assert saved.status_code == 200
         assert saved.json()["settings"]["text_enhancement"] == "silero"
+        assert saved.json()["settings"]["stress_format"] == "acute"
         rejected = client.put("/admin/runtime-settings", json={**payload, "model_variant": "q8"})
         assert rejected.status_code == 422

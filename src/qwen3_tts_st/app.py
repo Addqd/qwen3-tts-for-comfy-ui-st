@@ -57,7 +57,7 @@ class RuntimeSettingsRequest(BaseModel):
     language: Literal["Russian"] = "Russian"
     russian_normalization: Literal["off", "basic", "full"]
     auto_stress: Literal["off", "silero"] = "silero"
-    stress_format: Literal["plus", "acute", "apostrophe"] = "plus"
+    stress_format: Literal["plus", "acute", "apostrophe"] = "acute"
     text_enhancement: Literal["off", "silero"] = "off"
     pronunciation_defaults: dict[str, str] | str = Field(default_factory=dict)
     seed: int = -1

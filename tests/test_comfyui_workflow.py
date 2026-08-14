@@ -30,7 +30,7 @@ def test_canonical_voice_lab_matches_current_node_schema():
     assert module.PRODUCTION_MODEL.endswith("(tts-1-ru)")
     assert by_type["QwenTTSServer"]["widgets_values"] == ["http://127.0.0.1:8020", 900, "wav"]
     assert by_type["QwenTTSRuntimeSettings"]["widgets_values"] == [
-        True, "Russian", "Full Russian", "Silero Stress", "Silero +", "Off", -1, "fixed",
+        True, "Russian", "Full Russian", "Silero Stress", "Combining Acute", "Off", -1, "fixed",
         4096, 0.75, 40, 0.9, 1.05, "",
     ]
     assert len(by_type["QwenTTSCloneVoice"]["widgets_values"]) == 5
@@ -49,9 +49,27 @@ def test_active_node_inputs_are_real_qwentts_controls_only():
     runtime = module.QwenTTSRuntimeSettingsNode.INPUT_TYPES()
     names = set(runtime["required"]) | set(runtime.get("optional", {}))
     assert {"language", "russian_normalization", "auto_stress", "stress_format", "text_enhancement", "seed", "max_new_tokens", "temperature", "top_k", "top_p", "repetition_penalty"} <= names
+    assert runtime["required"]["stress_format"][0] == ["Combining Acute"]
     assert names.isdisjoint({"active_model", "model_variant", "generation_preset", "multilingual_mode", "chunking_mode", "style", "clone_mode"})
     clone = module.QwenTTSCloneVoiceNode.INPUT_TYPES()["required"]
     assert list(clone)[-1] == "overwrite"
+
+
+def test_legacy_comfy_stress_values_are_sent_as_combining_acute(monkeypatch):
+    module = load_nodes()
+    captured = {}
+
+    def request(_server, _path, payload=None, method=None):
+        captured.update(payload or {})
+        return {"settings": payload}, {}
+
+    monkeypatch.setattr(module, "_json_request", request)
+    module.QwenTTSRuntimeSettingsNode().configure(
+        {"endpoint": "http://127.0.0.1:8020", "timeout": 1},
+        True, "Russian", "Full Russian", "Silero Stress", "Silero +", "Off",
+        -1, 4096, 0.75, 40, 0.9, 1.05, "",
+    )
+    assert captured["stress_format"] == "acute"
 
 
 def test_read_only_nodes_report_unavailable_backend(monkeypatch):
