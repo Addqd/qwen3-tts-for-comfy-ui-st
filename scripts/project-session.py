@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timezone
@@ -213,6 +213,8 @@ def _records(request: dict[str, object], key: str) -> list[dict[str, object]]:
 def _valid_record(record: object) -> bool:
     return (
         isinstance(record, dict)
+        and isinstance(record.get("name"), str)
+        and bool(record["name"].strip())
         and isinstance(record.get("pid"), int)
         and isinstance(record.get("creation_filetime"), int)
         and isinstance(record.get("executable"), str)
@@ -240,11 +242,34 @@ def _load_session_state(state_path: Path) -> dict[str, object] | None:
     return state
 
 
+def _load_creation_claim(state_path: Path) -> dict[str, object] | None:
+    try:
+        claim = json.loads(state_path.read_text(encoding="utf-8-sig"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(claim, dict)
+        or claim.get("schema") != 1
+        or claim.get("status") != "creating"
+        or not isinstance(claim.get("claim_id"), str)
+        or not claim["claim_id"]
+        or not _valid_record(claim.get("creator"))
+    ):
+        return None
+    return claim
+
+
 def _cleanup(project_root: Path, state_path: Path, session_id: str, job: int, components: list[dict[str, object]]) -> None:
     powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     cleanup_environment = os.environ.copy()
     cleanup_environment["QWEN3_TTS_SUPERVISOR_CLEANUP"] = "1"
-    for script in (project_root / "scripts" / "stop-comfyui.ps1", project_root / "stop.ps1"):
+    names = {str(record.get("name", "")) for record in components}
+    scripts = []
+    if "ComfyUI" in names:
+        scripts.append(project_root / "scripts" / "stop-comfyui.ps1")
+    if names & {"facade", "qwentts runner", "qwentts.cpp"}:
+        scripts.append(project_root / "stop.ps1")
+    for script in scripts:
         try:
             subprocess.run(
                 [str(powershell), "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
@@ -263,18 +288,21 @@ def _cleanup(project_root: Path, state_path: Path, session_id: str, job: int, co
         kernel32.TerminateJobObject(job, 1)
     try:
         with _session_mutex(state_path):
-            state = json.loads(state_path.read_text(encoding="utf-8-sig"))
-            if state.get("session_id") == session_id:
+            state = _load_session_state(state_path)
+            if state is None or state.get("session_id") == session_id:
                 state_path.unlink(missing_ok=True)
                 for name in ("server.json", "qwentts.json", "comfyui.json"):
                     (state_path.parent / name).unlink(missing_ok=True)
-    except (OSError, ValueError, json.JSONDecodeError, TimeoutError):
+    except (OSError, TimeoutError):
         pass
 
 
-def supervise(project_root: Path, request_path: Path, state_path: Path, lock_held: bool = False) -> int:
-    mutation = nullcontext() if lock_held else _session_mutex(state_path)
-    with mutation:
+def supervise(project_root: Path, request_path: Path, state_path: Path, claim_id: str | None = None) -> int:
+    with _session_mutex(state_path):
+        if claim_id is not None:
+            claim = _load_creation_claim(state_path)
+            if claim is None or claim["claim_id"] != claim_id:
+                return 9
         request = _read_request(request_path)
         request_path.unlink(missing_ok=True)
         existing = _load_session_state(state_path) if state_path.exists() else None
@@ -310,17 +338,20 @@ def supervise(project_root: Path, request_path: Path, state_path: Path, lock_hel
             missing_component = None
             try:
                 with _session_mutex(state_path):
-                    latest = json.loads(state_path.read_text(encoding="utf-8-sig"))
-                    if latest.get("session_id") == session_id:
-                        owners = latest.get("owners", owners)
-                        components = latest.get("components", components)
-                        if latest.get("stop_requested"):
-                            reason = str(latest.get("stop_reason") or "controlled teardown requested")
-                            break
+                    latest = _load_session_state(state_path)
+                    if latest is None or latest["session_id"] != session_id:
+                        reason = "project session state became invalid"
+                        break
+                    owners = latest["owners"]
+                    components = latest["components"]
+                    if latest.get("stop_requested"):
+                        reason = str(latest.get("stop_reason") or "controlled teardown requested")
+                        break
                     missing_owner = next((record for record in owners if not _same_process(record)), None)
                     missing_component = next((record for record in components if not _same_process(record)), None)
-            except (OSError, ValueError, json.JSONDecodeError, TimeoutError):
-                pass
+            except (OSError, TimeoutError):
+                reason = "project session state could not be read safely"
+                break
             if missing_owner:
                 reason = f"owner {missing_owner['name']} closed"
                 break
@@ -398,38 +429,53 @@ def attach(request_path: Path, state_path: Path) -> int:
 
 
 def ensure(project_root: Path, request_path: Path, state_path: Path) -> int:
-    with _session_mutex(state_path):
-        state = _load_session_state(state_path) if state_path.exists() else None
-        if state is not None and _same_process(state["supervisor"]):
-            return _attach_locked(request_path, state_path)
-        request = _read_request(request_path)
-        if request.get("components"):
-            return 7
-        state_path.unlink(missing_ok=True)
-        logs = project_root / "logs"
-        logs.mkdir(parents=True, exist_ok=True)
-        command = [
-            sys.executable, str(Path(__file__).resolve()), "supervise",
-            "--project-root", str(project_root), "--request", str(request_path),
-            "--state", str(state_path), "--lock-held",
-        ]
-        with (logs / "project-session.out.log").open("ab", buffering=0) as stdout, \
-             (logs / "project-session.err.log").open("ab", buffering=0) as stderr:
-            supervisor = subprocess.Popen(command, cwd=project_root, stdout=stdout, stderr=stderr)
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
+    request = _read_request(request_path)
+    if request.get("components"):
+        return 7
+    claim_id = uuid4().hex
+    claimed = False
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        with _session_mutex(state_path):
             state = _load_session_state(state_path) if state_path.exists() else None
             if state is not None and _same_process(state["supervisor"]):
-                return 0
-            if supervisor.poll() is not None:
-                return supervisor.returncode or 1
-            time.sleep(0.1)
+                return _attach_locked(request_path, state_path)
+            claim = _load_creation_claim(state_path) if state_path.exists() else None
+            if claim is None or not _same_process(claim["creator"]):
+                _atomic_write(state_path, {
+                    "schema": 1,
+                    "status": "creating",
+                    "claim_id": claim_id,
+                    "creator": _process_record(os.getpid(), "session creator"),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+                claimed = True
+        if claimed:
+            break
+        time.sleep(0.1)
+    if not claimed:
+        return 8
+    logs = project_root / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable, str(Path(__file__).resolve()), "supervise",
+        "--project-root", str(project_root), "--request", str(request_path),
+        "--state", str(state_path), "--claim-id", claim_id,
+    ]
+    with (logs / "project-session.out.log").open("ab", buffering=0) as stdout, \
+         (logs / "project-session.err.log").open("ab", buffering=0) as stderr:
+        supervisor = subprocess.Popen(command, cwd=project_root, stdout=stdout, stderr=stderr)
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
         state = _load_session_state(state_path) if state_path.exists() else None
         if state is not None and _same_process(state["supervisor"]):
             return 0
-        supervisor.terminate()
-        supervisor.wait(timeout=5)
-        return 8
+        if supervisor.poll() is not None:
+            return supervisor.returncode or 1
+        time.sleep(0.1)
+    supervisor.terminate()
+    supervisor.wait(timeout=5)
+    return 8
 
 
 def release_owner(request_path: Path, state_path: Path) -> int:
@@ -488,7 +534,7 @@ def main() -> int:
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--request", required=True)
     parser.add_argument("--state", required=True)
-    parser.add_argument("--lock-held", action="store_true")
+    parser.add_argument("--claim-id")
     args = parser.parse_args()
     root = Path(args.project_root).resolve()
     request = Path(args.request).resolve()
@@ -504,7 +550,7 @@ def main() -> int:
         return release_component(request, state)
     if args.mode == "request-stop":
         return request_stop(request, state)
-    return supervise(root, request, state, lock_held=args.lock_held)
+    return supervise(root, request, state, claim_id=args.claim_id)
 
 
 if __name__ == "__main__":

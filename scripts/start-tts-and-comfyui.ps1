@@ -77,14 +77,9 @@ if ($WaitForComfyUIExit -and -not $VisibleComfyUIConsole) {
     throw "WaitForComfyUIExit requires VisibleComfyUIConsole. No services were started."
 }
 
-$SupervisorProcess = Start-OrJoin-ProjectSession -OwnerName "combined launcher" -MonitorOwner -Components @()
-$CombinedOwnerRegistered = $true
-$SupervisorProcess = Start-OrJoin-ProjectSession -Components @(
-    @{ name = "combined startup launcher"; pid = $PID }
-)
-$CombinedComponentRegistered = $true
-
 try {
+    $SupervisorProcess = Start-OrJoin-ProjectSession -OwnerName "combined launcher" -MonitorOwner -Components @()
+    $CombinedOwnerRegistered = $true
     if (Test-LocalHttp -Uri "$ComfyUrl/system_stats") {
         Assert-QwenTTSCloneVoiceSchema -Url $ComfyUrl
         Write-Host "ComfyUI is already ready: $ComfyUrl"
@@ -162,13 +157,13 @@ try {
         }
         Write-Host "Project session stopped. Backend and ComfyUI are closed."
     } elseif ($CombinedOwnerRegistered) {
-        Release-ProjectSessionComponent -ComponentName "combined startup launcher"
-        $CombinedComponentRegistered = $false
         Release-ProjectSessionOwner -OwnerName "combined launcher"
         $CombinedOwnerRegistered = $false
     }
 } catch {
     $Failure = $_
-    Request-ProjectSessionTeardown -Supervisor $SupervisorProcess -Reason "combined startup failed"
+    if ($SupervisorProcess) {
+        Request-ProjectSessionTeardown -Supervisor $SupervisorProcess -Reason "combined startup failed"
+    }
     throw $Failure
 }

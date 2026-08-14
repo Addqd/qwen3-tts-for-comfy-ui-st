@@ -23,30 +23,23 @@ if (-not (Test-Path -LiteralPath $Main)) { throw "ComfyUI main.py was not found:
 Sync-QwenTTSManagedWorkflow -Settings $Settings | Out-Null
 $SessionSupervisor = $null
 $StartupOwnerRegistered = $false
-$StartupComponentRegistered = $false
-if (-not $NoSessionSupervisor) {
-    $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "ComfyUI startup" -MonitorOwner -Components @()
-    $StartupOwnerRegistered = $true
-    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
-        @{ name = "ComfyUI startup launcher"; pid = $PID }
-    )
-    $StartupComponentRegistered = $true
-} elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
-    throw "NoSessionSupervisor requires an existing managed project session."
-}
-
+try {
 if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
     $OldState = Get-Content -Raw -LiteralPath $script:ComfyUIStatePath | ConvertFrom-Json
     $OldProcess = Test-ComfyUIOwnedProcess -State $OldState
     if ($OldProcess) {
         if (Test-LocalHttp -Uri "$($OldState.url)/system_stats") {
+            Assert-QwenTTSCloneVoiceSchema -Url ([string]$OldState.url)
+            if (-not $NoSessionSupervisor) {
+                $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "ComfyUI startup" -MonitorOwner -Components @()
+                $StartupOwnerRegistered = $true
+            } elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
+                throw "NoSessionSupervisor requires an existing managed project session."
+            }
             $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
                 @{ name = "ComfyUI"; pid = $OldProcess.Id }
             )
-            Assert-QwenTTSCloneVoiceSchema -Url ([string]$OldState.url)
             if ($StartupOwnerRegistered) {
-                Release-ProjectSessionComponent -ComponentName "ComfyUI startup launcher"
-                $StartupComponentRegistered = $false
                 Release-ProjectSessionOwner -OwnerName "ComfyUI startup"
                 $StartupOwnerRegistered = $false
             }
@@ -58,6 +51,13 @@ if (Test-Path -LiteralPath $script:ComfyUIStatePath) {
     }
 }
 if (Test-LocalPortInUse -Port ([int]$Settings.port)) { throw "Port $($Settings.port) is already in use; no process was stopped." }
+
+if (-not $NoSessionSupervisor) {
+    $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "ComfyUI startup" -MonitorOwner -Components @()
+    $StartupOwnerRegistered = $true
+} elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
+    throw "NoSessionSupervisor requires an existing managed project session."
+}
 
 & (Join-Path $script:ProjectRoot "integrations\comfyui\install.ps1") `
     -ComfyUIPath $Root -Mode Junction -Synchronize -Confirm:$false
@@ -74,23 +74,18 @@ $Arguments = @(
 $Manager = [bool]$Settings.manager_enabled -and -not $NoManager
 if ($Manager) { $Arguments += "--enable-manager" }
 
-$StartParameters = @{
+$ManagedArguments = @{
+    Name = "ComfyUI"
     FilePath = $Python
     ArgumentList = $Arguments
     WorkingDirectory = (Join-Path $Root "ComfyUI")
-    PassThru = $true
 }
 if ($Hidden) {
-    $StartParameters.WindowStyle = "Hidden"
-    $StartParameters.RedirectStandardOutput = $OutLog
-    $StartParameters.RedirectStandardError = $ErrLog
-} else {
-    $StartParameters.WindowStyle = "Normal"
+    $ManagedArguments.Hidden = $true
+    $ManagedArguments.RedirectStandardOutput = $OutLog
+    $ManagedArguments.RedirectStandardError = $ErrLog
 }
-$Process = Start-Process @StartParameters
-$SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
-    @{ name = "ComfyUI"; pid = $Process.Id }
-)
+$Process = Start-ManagedProjectProcess @ManagedArguments
 $State = [ordered]@{
     pid = $Process.Id
     start_ticks = $Process.StartTime.ToUniversalTime().Ticks
@@ -117,20 +112,19 @@ if (-not $Ready) {
     Request-ProjectSessionTeardown -Supervisor $SessionSupervisor -Reason "ComfyUI startup timed out"
     throw "ComfyUI did not become ready within $Timeout seconds."
 }
-try {
-    Assert-QwenTTSCloneVoiceSchema -Url ([string]$State.url)
-    if ($StartupOwnerRegistered) {
-        Release-ProjectSessionComponent -ComponentName "ComfyUI startup launcher"
-        $StartupComponentRegistered = $false
-        Release-ProjectSessionOwner -OwnerName "ComfyUI startup"
-        $StartupOwnerRegistered = $false
-    }
-} catch {
-    $SchemaFailure = $_
-    Request-ProjectSessionTeardown -Supervisor $SessionSupervisor -Reason "ComfyUI schema validation failed"
-    throw $SchemaFailure
+Assert-QwenTTSCloneVoiceSchema -Url ([string]$State.url)
+if ($StartupOwnerRegistered) {
+    Release-ProjectSessionOwner -OwnerName "ComfyUI startup"
+    $StartupOwnerRegistered = $false
 }
 Write-Host "ComfyUI: $($State.url)"
 Write-Host "PID: $($State.pid); Manager: $Manager; console visible: $(-not $Hidden)"
 if ($SessionSupervisor) { Write-Host "Project session supervisor: PID $($SessionSupervisor.Id)" }
 Write-Host "Log: $OutLog"
+} catch {
+    $Failure = $_
+    if ($SessionSupervisor) {
+        Request-ProjectSessionTeardown -Supervisor $SessionSupervisor -Reason "ComfyUI startup failed"
+    }
+    throw $Failure
+}

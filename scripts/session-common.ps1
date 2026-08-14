@@ -73,18 +73,87 @@ function Release-ProjectSessionOwner {
 }
 
 function Release-ProjectSessionComponent {
-    param([Parameter(Mandatory = $true)][string]$ComponentName)
+    param(
+        [Parameter(Mandatory = $true)][string]$ComponentName,
+        [int]$ProcessId = $PID
+    )
     if (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) { return }
     $Python = Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"
     $SupervisorScript = Join-Path $PSScriptRoot "project-session.py"
     $Runtime = Split-Path -Parent $script:ProjectSessionStatePath
     $RequestPath = Join-Path $Runtime ("project-session-release-component-{0}-{1}.json" -f $PID,[Guid]::NewGuid().ToString("N"))
-    @{ components = @(@{ name = $ComponentName; pid = $PID }) } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
+    @{ components = @(@{ name = $ComponentName; pid = $ProcessId }) } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
     try {
         & $Python $SupervisorScript release-component --project-root $script:ProjectRoot --request $RequestPath --state $script:ProjectSessionStatePath
         if ($LASTEXITCODE -notin @(0,3)) { throw "Unable to release the project-session startup component (exit $LASTEXITCODE)." }
     } finally {
         Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Start-ManagedProjectProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [hashtable]$Environment = @{},
+        [switch]$Hidden,
+        [string]$RedirectStandardOutput = "",
+        [string]$RedirectStandardError = ""
+    )
+    $Python = Join-Path $script:ProjectRoot ".venv\Scripts\python.exe"
+    $HelperScript = Join-Path $PSScriptRoot "project-process.py"
+    $Runtime = Join-Path $script:ProjectRoot "runtime"
+    $Token = "{0}-{1}" -f $PID,[Guid]::NewGuid().ToString("N")
+    $RequestPath = Join-Path $Runtime "project-process-$Token.json"
+    $GoPath = Join-Path $Runtime "project-process-$Token.go"
+    $ResultPath = Join-Path $Runtime "project-process-$Token.result.json"
+    $ReleasePath = Join-Path $Runtime "project-process-$Token.release"
+    $DonePath = Join-Path $Runtime "project-process-$Token.done"
+    $BootstrapName = "$Name bootstrap $Token"
+    $Bootstrap = $null
+    $Process = $null
+    [ordered]@{
+        file_path = [IO.Path]::GetFullPath($FilePath)
+        arguments = @($ArgumentList)
+        working_directory = [IO.Path]::GetFullPath($WorkingDirectory)
+        environment = $Environment
+        hidden = [bool]$Hidden
+        stdout = $RedirectStandardOutput
+        stderr = $RedirectStandardError
+    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $RequestPath -Encoding UTF8
+    try {
+        $Bootstrap = Start-Process -FilePath $Python -ArgumentList @($HelperScript,"--request",$RequestPath,"--go",$GoPath,"--result",$ResultPath,"--release",$ReleasePath,"--done",$DonePath,"--state",$script:ProjectSessionStatePath) -WorkingDirectory $script:ProjectRoot -WindowStyle Hidden -PassThru
+        $null = Start-OrJoin-ProjectSession -Components @(@{ name = $BootstrapName; pid = $Bootstrap.Id })
+        New-Item -ItemType File -Path $GoPath -Force | Out-Null
+        $Deadline = (Get-Date).AddSeconds(30)
+        while (-not (Test-Path -LiteralPath $ResultPath) -and (Get-Date) -lt $Deadline) {
+            if ($Bootstrap.HasExited) { throw "$Name bootstrap exited before creating the process." }
+            Start-Sleep -Milliseconds 50
+        }
+        if (-not (Test-Path -LiteralPath $ResultPath)) { throw "$Name bootstrap timed out." }
+        $Result = Get-Content -Raw -LiteralPath $ResultPath -Encoding UTF8 | ConvertFrom-Json
+        $Process = Get-Process -Id ([int]$Result.pid) -ErrorAction Stop
+        $null = Start-OrJoin-ProjectSession -Components @(@{ name = $Name; pid = $Process.Id })
+        New-Item -ItemType File -Path $ReleasePath -Force | Out-Null
+        $Deadline = (Get-Date).AddSeconds(10)
+        do {
+            if ($Bootstrap.HasExited) { throw "$Name bootstrap exited before resuming the process." }
+            $Result = Get-Content -Raw -LiteralPath $ResultPath -Encoding UTF8 | ConvertFrom-Json
+            if (-not $Result.resumed) { Start-Sleep -Milliseconds 50 }
+        } while (-not $Result.resumed -and (Get-Date) -lt $Deadline)
+        if (-not $Result.resumed) { throw "$Name bootstrap did not confirm process resume." }
+        Release-ProjectSessionComponent -ComponentName $BootstrapName -ProcessId $Bootstrap.Id
+        New-Item -ItemType File -Path $DonePath -Force | Out-Null
+        try { Wait-Process -Id $Bootstrap.Id -Timeout 10 -ErrorAction SilentlyContinue } catch { }
+        return $Process
+    } catch {
+        if ($Process -and -not $Process.HasExited) { Stop-Process -Id $Process.Id -ErrorAction SilentlyContinue }
+        if ($Bootstrap -and -not $Bootstrap.HasExited) { Stop-Process -Id $Bootstrap.Id -ErrorAction SilentlyContinue }
+        throw
+    } finally {
+        Remove-Item -LiteralPath $RequestPath,$GoPath,$ResultPath,$ReleasePath,$DonePath -Force -ErrorAction SilentlyContinue
     }
 }
 

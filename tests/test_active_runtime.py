@@ -4,6 +4,10 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
+import qwen3_tts_st.config as config_module
+
 from qwen3_tts_st.config import load_config
 from qwen3_tts_st.runtime_settings import RuntimeSettingsStore
 from qwen3_tts_st.voices import VoiceLibrary
@@ -82,6 +86,27 @@ def test_local_executable_paths_cannot_override_the_pinned_runtime(tmp_path):
     assert "self.config.qwentts_executables()" in voices
     assert 'path("qwentts.executable"' not in runner
     assert 'path("qwentts.codec_executable"' not in voices
+
+
+def test_local_backend_override_cannot_disable_cuda0(tmp_path):
+    local = tmp_path / "config.local.yaml"
+    local.write_text("qwentts:\n  backend: CPU\n", encoding="utf-8")
+    config = load_config(local)
+    assert config.qwentts_backend() == "CUDA0"
+    runner = (ROOT / "scripts" / "qwentts-runner.py").read_text(encoding="utf-8")
+    assert 'environment["GGML_BACKEND"] = config.qwentts_backend()' in runner
+
+
+@pytest.mark.parametrize("files", [None, "bad", 3])
+def test_executable_manifest_files_must_be_an_object(tmp_path, monkeypatch, files):
+    manifest = tmp_path / "qwentts-runtime.json"
+    manifest.write_text(json.dumps({
+        "files": files,
+        "models": {"files": list(config_module.QWENTTS_BF16_FILES)},
+    }), encoding="utf-8")
+    monkeypatch.setattr(config_module, "QWENTTS_MANIFEST", manifest)
+    with pytest.raises(ValueError, match="pinned qwentts runtime manifest is invalid"):
+        load_config(manifest).qwentts_executables()
 
 
 def test_legacy_runtime_settings_are_migrated_to_real_qwentts_controls(tmp_path):

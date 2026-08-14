@@ -8,6 +8,7 @@ import re
 import threading
 import time
 from typing import Any, Callable, Sequence
+from uuid import uuid4
 
 
 _STRESS_MARKER = re.compile(r"\+([аеёиоуыэюяАЕЁИОУЫЭЮЯ])([\u0301']?)")
@@ -76,7 +77,7 @@ class SileroPreprocessor:
         else:
             raise ValueError(f"Unknown Silero component: {component}")
         missing = [str(path) for path in required if not path.exists()]
-        if missing:
+        if not required or missing:
             raise SileroPreprocessingError(
                 f"{label} assets are missing; run .\\scripts\\install.ps1"
             )
@@ -180,7 +181,9 @@ class SileroPreprocessor:
                     pattern = re.compile(re.escape(term), flags=re.I)
 
                     def protect(match: re.Match[str]) -> str:
-                        placeholder = f"qwenprotectedtoken{len(protected_phrases)}"
+                        placeholder = f"qwenprotected{uuid4().hex}token"
+                        while placeholder.casefold() in protected_value.casefold():
+                            placeholder = f"qwenprotected{uuid4().hex}token"
                         protected_phrases.append((placeholder, match.group(0)))
                         return placeholder
 

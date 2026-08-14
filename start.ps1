@@ -29,24 +29,16 @@ foreach ($Port in @([int]$ConfigJson.public,[int]$ConfigJson.engine)) {
 $RunnerScript = Join-Path $ProjectRoot "scripts\qwentts-runner.py"
 $SessionSupervisor = $null
 $StartupOwnerRegistered = $false
-$StartupComponentRegistered = $false
-if (-not $NoSessionSupervisor) {
-    $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "backend startup" -MonitorOwner -Components @()
-    $StartupOwnerRegistered = $true
-    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
-        @{ name = "backend startup launcher"; pid = $PID }
-    )
-    $StartupComponentRegistered = $true
-} elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
-    throw "NoSessionSupervisor requires an existing managed project session."
-}
-$PreviousInternal = $env:QWEN3_TTS_SESSION_INTERNAL
-$env:QWEN3_TTS_SESSION_INTERNAL = "1"
-$Runner = Start-Process -FilePath $Python -ArgumentList @($RunnerScript,"--config",$ConfigPath) -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
 try {
-    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
-        @{ name = "qwentts runner"; pid = $Runner.Id }
-    )
+    if (-not $NoSessionSupervisor) {
+        $SessionSupervisor = Start-OrJoin-ProjectSession -OwnerName "backend startup" -MonitorOwner -Components @()
+        $StartupOwnerRegistered = $true
+    } elseif (-not (Test-Path -LiteralPath $script:ProjectSessionStatePath)) {
+        throw "NoSessionSupervisor requires an existing managed project session."
+    }
+    $Runner = Start-ManagedProjectProcess -Name "qwentts runner" -FilePath $Python `
+        -ArgumentList @($RunnerScript,"--config",$ConfigPath) -WorkingDirectory $ProjectRoot `
+        -Environment @{ QWEN3_TTS_SESSION_INTERNAL = "1" } -Hidden
     $EngineDeadline = (Get-Date).AddSeconds($WaitSeconds)
     do {
         Start-Sleep -Milliseconds 500
@@ -56,7 +48,7 @@ try {
     if (-not $EngineReady) { throw "qwentts did not answer /health within $WaitSeconds seconds" }
     $QwenState = Get-Content -Raw -LiteralPath $QwenStatePath -Encoding UTF8 | ConvertFrom-Json
     $Engine = Get-Process -Id ([int]$QwenState.pid) -ErrorAction Stop
-    if ([int]$QwenState.runner_parent_pid -ne $Runner.Id -or -not $QwenState.session_id) {
+    if ([int]$QwenState.runner_pid -ne $Runner.Id -or -not $QwenState.session_id) {
         throw "qwentts runtime state does not belong to the current runner session"
     }
     $SessionLog = Join-Path $ProjectRoot "logs\qwentts.err.log"
@@ -68,12 +60,9 @@ try {
     $QwenState | Add-Member -NotePropertyName verified_backend -NotePropertyValue "CUDA0" -Force
     $QwenState | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $QwenStatePath -Encoding UTF8
 
-    $Facade = Start-Process -FilePath $Python -ArgumentList @("-m","qwen3_tts_st.cli","--config",$ConfigPath) -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru
-    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(
-        @{ name = "facade"; pid = $Facade.Id },
-        @{ name = "qwentts.cpp"; pid = $Engine.Id }
-    )
-    if ($null -eq $PreviousInternal) { Remove-Item Env:QWEN3_TTS_SESSION_INTERNAL -ErrorAction SilentlyContinue } else { $env:QWEN3_TTS_SESSION_INTERNAL = $PreviousInternal }
+    $SessionSupervisor = Start-OrJoin-ProjectSession -Components @(@{ name = "qwentts.cpp"; pid = $Engine.Id })
+    $Facade = Start-ManagedProjectProcess -Name "facade" -FilePath $Python `
+        -ArgumentList @("-m","qwen3_tts_st.cli","--config",$ConfigPath) -WorkingDirectory $ProjectRoot -Hidden
     $PublicUrl = "http://127.0.0.1:$($ConfigJson.public)"
     $FacadeDeadline = (Get-Date).AddSeconds($WaitSeconds)
     do {
@@ -91,8 +80,6 @@ try {
     }
     $State | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StatePath -Encoding UTF8
     if ($StartupOwnerRegistered) {
-        Release-ProjectSessionComponent -ComponentName "backend startup launcher"
-        $StartupComponentRegistered = $false
         Release-ProjectSessionOwner -OwnerName "backend startup"
         $StartupOwnerRegistered = $false
     }
@@ -101,7 +88,6 @@ try {
     Write-Host "Engine: qwentts.cpp / CUDA0 / $($Health.model_variant) / $($Health.model_file) (PID $($Engine.Id))"
     Write-Host "Default voice: $($Health.default_voice)"
 } catch {
-    if ($null -eq $PreviousInternal) { Remove-Item Env:QWEN3_TTS_SESSION_INTERNAL -ErrorAction SilentlyContinue } else { $env:QWEN3_TTS_SESSION_INTERNAL = $PreviousInternal }
     if ($SessionSupervisor) {
         Request-ProjectSessionTeardown -Supervisor $SessionSupervisor -Reason "backend startup failed"
     } else {

@@ -57,7 +57,7 @@ def main() -> int:
         "--max-batch", str(int(config.get("qwentts.max_batch", 1))),
     ]
     environment = os.environ.copy()
-    environment["GGML_BACKEND"] = str(config.get("qwentts.backend", "CUDA0"))
+    environment["GGML_BACKEND"] = config.qwentts_backend()
     state_path = runtime / "qwentts.json"
     temporary_state = runtime / "qwentts.json.tmp"
     session_id = uuid4().hex

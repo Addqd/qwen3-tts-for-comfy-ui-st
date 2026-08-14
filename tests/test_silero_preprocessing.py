@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import qwen3_tts_st.app as app_module
+import qwen3_tts_st.silero_preprocessing as silero_module
 from qwen3_tts_st.config import load_config
 from qwen3_tts_st.runtime_settings import RuntimeSettingsStore
 from qwen3_tts_st.service import TTSService
@@ -187,6 +188,25 @@ def test_stress_verification_does_not_depend_on_te_asset(tmp_path):
     state, provenance, _catalogue, te_model, _stress_model = _silero_assets(tmp_path)
     te_model.write_bytes(b"broken")
     SileroPreprocessor(state, provenance)._require_provisioned("stress")
+
+
+def test_stress_verification_rejects_empty_stress_asset_set(tmp_path):
+    state, provenance, catalogue, te_model, _stress_model = _silero_assets(tmp_path)
+    payload = json.loads(state.read_text(encoding="utf-8"))
+    payload["model_files"] = [str(catalogue), str(te_model)]
+    state.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(SileroPreprocessingError, match="Silero Stress assets are missing"):
+        SileroPreprocessor(state, provenance)._require_provisioned("stress")
+
+
+def test_multiword_placeholders_do_not_collide_with_user_text(monkeypatch, tmp_path):
+    runtime = SileroPreprocessor(tmp_path / "unused.json")
+    tokens = iter((SimpleNamespace(hex="collision"), SimpleNamespace(hex="unique")))
+    monkeypatch.setattr(silero_module, "uuid4", lambda: next(tokens))
+    monkeypatch.setattr(runtime, "_load_stress", lambda: lambda text, **_kwargs: text)
+    source = "qwenprotectedcollisiontoken и старый замок"
+    result, _ = runtime.process(source, "off", "silero", "plus", ["старый замок"])
+    assert result == source
 
 
 def test_te_verification_does_not_depend_on_stress_asset(tmp_path):

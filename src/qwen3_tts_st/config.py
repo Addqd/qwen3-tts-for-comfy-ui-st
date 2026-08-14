@@ -17,6 +17,7 @@ QWENTTS_BF16_FILES = (
     "qwen-tokenizer-12hz-BF16.gguf",
 )
 QWENTTS_EXECUTABLE_FILES = ("tts-server.exe", "qwen-codec.exe")
+QWENTTS_BACKEND = "CUDA0"
 
 
 def _merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -64,11 +65,16 @@ class AppConfig:
         try:
             manifest = json.loads(QWENTTS_MANIFEST.read_text(encoding="utf-8"))
             files = manifest["files"]
+            if not isinstance(files, dict):
+                raise TypeError("qwentts manifest files must be an object")
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("The pinned qwentts runtime manifest is invalid") from exc
         if any(name not in files for name in QWENTTS_EXECUTABLE_FILES):
             raise ValueError("The pinned qwentts runtime manifest is missing a production executable")
         return tuple(QWENTTS_BIN_DIR / name for name in QWENTTS_EXECUTABLE_FILES)
+
+    def qwentts_backend(self) -> str:
+        return QWENTTS_BACKEND
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
